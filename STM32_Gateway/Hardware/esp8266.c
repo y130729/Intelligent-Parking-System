@@ -531,6 +531,7 @@ char *ESP8266_ReceiveString(FunctionalState enumEnUnvarnishTx)
 	return pRecStr;
 }
 
+#if WIFI_ENABLE
 void USART2_IRQHandler(void)
 {	
     uint8_t ucCh;
@@ -638,6 +639,9 @@ void ESP8266_AT_Test(void)
     USART_Printf("ESP8266 AT Test: FAILED after 5 attempts!\r\n");
 }
 
+#endif
+
+#if WIFI_ENABLE
 void ESP8266_ProcessWiFiConnection(void)
 {
     if (wifi_state == WIFI_STATE_IDLE || wifi_state == WIFI_STATE_CONNECTED)
@@ -731,6 +735,7 @@ void ESP8266_ProcessWiFiConnection(void)
         wifi_retry_count = 0;
     }
 }
+#endif
 
 void ESP8266_ReconnectWiFi(void)
 {
@@ -1144,4 +1149,5 @@ void ESP8266_ProcessPendingTasks(void)
         command_processing = 0;
     }
 }
+
 

@@ -8,6 +8,7 @@
 #include "system_tick.h"
 #include "USART.h"
 #include "esp8266.h"
+#include "pi_link.h"
 #include "flash_storage.h"
 #include <string.h>
 #include <stdio.h>
@@ -49,7 +50,15 @@ void StateMachine_SetVehicleArrive(void)
 void StateMachine_UpdateRemainingSpots(uint8_t count)
 {
     remaining_spots = count;
+#if WIFI_ENABLE
     MQTT_ReportProperty(remaining_spots);
+#else
+    {
+        char pi_buf[16];
+        sprintf(pi_buf, "SPOTS:%d\r\n", remaining_spots);
+        PI_UART_SendString(pi_buf);
+    }
+#endif
 }
 
 void StateMachine_Process(void)
@@ -103,13 +112,19 @@ void StateMachine_Process(void)
                     card_id[0], card_id[1], card_id[2], card_id[3]);
             OLED_ShowString(3, 1, card_str);
             
+#if WIFI_ENABLE
             MQTT_ReportCardID(card_id);  // 只上报卡号
-            
             char wifi_msg[30];
             sprintf(wifi_msg, "CARD:%02X%02X%02X%02X", 
                     card_id[0], card_id[1], card_id[2], card_id[3]);
             USART_Printf("WiFi: Sending card ID: %s\r\n", wifi_msg);
             ESP8266_SendToClient(wifi_msg);
+#else
+            char pi_msg[30];
+            sprintf(pi_msg, "CARD:%02X%02X%02X%02X\r\n",
+                    card_id[0], card_id[1], card_id[2], card_id[3]);
+            PI_UART_SendString(pi_msg);
+#endif
             
             if (RFID_VerifyCard(card_id))
             {

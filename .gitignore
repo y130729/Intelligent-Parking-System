@@ -26,4 +26,7 @@ __pycache__/
 # ---- misc ----
 Thumbs.db
 .DS_Store
-*.tmp
+*.tmp# ---- Keil user-specific files ----
+*.uvoptx
+*.uvguix
+

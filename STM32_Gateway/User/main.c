@@ -11,6 +11,7 @@
 #include "project_config.h"
 #include "state_machine.h"
 #include "mqtt_report.h"
+#include "pi_link.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -30,17 +31,25 @@ int main(void)
     {
         StateMachine_Process();
         OLED_DisplayRemainingSpots();
+#if WIFI_ENABLE
         ESP8266_ProcessWiFiConnection();
         ESP8266_ProcessMQTTConnection();
         ESP8266_ProcessData();
+#else
+        PI_UART_Process();
+#endif
         ProcessUltrasonicData();
+#if WIFI_ENABLE
         MQTT_ProcessHeartbeat();
+#endif
         
         // 处理延迟的车位状态MQTT上报
         ProcessPendingSpotUpdate();
         
         // 处理ESP8266命令响应
+#if WIFI_ENABLE
         ESP8266_ProcessPendingTasks();
+#endif
         
         delay_ms(10);
     }
@@ -57,7 +66,9 @@ void System_Init(void)
     MFRC522_Init();
     Infrared_Init();
     Servo_Init();
+#if WIFI_ENABLE
     ESP8266_Init();
+#endif
     
     OLED_ShowString(1, 1, "Smart Parking");
     OLED_ShowString(2, 1, "System v1.0");
@@ -65,7 +76,11 @@ void System_Init(void)
     delay_ms(2000);
     
     StateMachine_Init();
+#if WIFI_ENABLE
     MQTT_Init();
+#else
+    PI_UART_Init();
+#endif
     
     OLED_ShowString(3, 1, "System Ready   ");
     USART_Printf("System Init OK\r\n");
@@ -143,7 +158,15 @@ void ProcessPendingSpotUpdate(void)
     if (pending_spot_update)
     {
         pending_spot_update = 0;
+#if WIFI_ENABLE
         MQTT_ReportSpotStatus(pending_spot_id, pending_spot_status);
+#else
+        {
+            char pi_buf[32];
+            sprintf(pi_buf, "SPOT:%d:%d\r\n", pending_spot_id, pending_spot_status);
+            PI_UART_SendString(pi_buf);
+        }
+#endif
     }
 }
 

@@ -3,6 +3,8 @@
 
 /* System Configuration */
 #define SYS_CLOCK_FREQ        72000000UL
+/* Network switch: 0 = offline mode (cloud handled by Raspberry Pi), 1 = ESP8266 WiFi on STM32 */
+#define WIFI_ENABLE           0
 
 /* Parking Lot Configuration */
 #define TOTAL_SPOTS           20

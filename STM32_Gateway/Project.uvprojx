@@ -10,7 +10,7 @@
       <TargetName>Target 1</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
-      <pCCUsed>5060528::V5.06 update 5 (build 528)::ARMCC</pCCUsed>
+      <pCCUsed>5060422::V5.06 update 4 (build 422)::ARMCC</pCCUsed>
       <uAC6>0</uAC6>
       <TargetOption>
         <TargetCommonOption>
@@ -703,6 +703,11 @@
               <FileName>esp8266.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\esp8266.c</FilePath>
+            </File>
+            <File>
+              <FileName>pi_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Hardware\pi_link.c</FilePath>
             </File>
             <File>
               <FileName>esp8266.h</FileName>
