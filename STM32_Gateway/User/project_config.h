@@ -8,7 +8,7 @@
 
 /* Parking Lot Configuration */
 #define TOTAL_SPOTS           20
-#define MAX_SPOT_ID           1
+#define MAX_SPOT_ID           20
 
 /* RFID Configuration */
 #define MAX_CARD_ID_LENGTH    4

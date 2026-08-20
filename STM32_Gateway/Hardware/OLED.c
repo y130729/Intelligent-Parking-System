@@ -379,14 +379,14 @@ void OLED_ShowCNString(uint8_t Line, uint8_t Column, char *String)
 		if (c >= 0xE0)
 		{
 			uint8_t Num = OLED_CN_FindIndex((uint8_t *)&String[i], 1);
-			if (Num != 0xFF) { OLED_ShowCN(Line, Column, Num); }
+			if (Num != 0xFF) { OLED_ShowCN(Line, (Column - 1) / 2 + 1, Num); }
 			i += 3;
 			Column += 2;
 		}
 		else if (c >= 0x80)
 		{
 			uint8_t Num = OLED_CN_FindIndex((uint8_t *)&String[i], 0);
-			if (Num != 0xFF) { OLED_ShowCN(Line, Column, Num); }
+			if (Num != 0xFF) { OLED_ShowCN(Line, (Column - 1) / 2 + 1, Num); }
 			i += 2;
 			Column += 2;
 		}
