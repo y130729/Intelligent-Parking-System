@@ -51,6 +51,7 @@ PROP_REPORT_TOPIC = "$oc/devices/{}/sys/properties/report"
 # Latest known values, used to answer query_status / command responses.
 STATE = {"remaining_spots": None, "barrier_state": None, "plate_number": None}
 PENDING_CMD = {"event": threading.Event(), "name": None, "success": False}
+CAPTURE_STATE = {"lock": threading.Lock(), "pending": False}
 
 
 def load_config():
@@ -79,12 +80,23 @@ def send_serial(ser, line):
 def capture_photo(out_path):
     cmd = ["rpicam-still", "-o", out_path, "--width", str(CAM_W),
            "--height", str(CAM_H), "--timeout", "3000", "-n"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-    if not os.path.exists(out_path):
-        raise RuntimeError("capture failed: %s" % ((r.stderr or r.stdout) or "")[-300:])
+    last_err = ""
+    for attempt in range(3):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            last_err = "timeout"
+            time.sleep(3)
+            continue
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return
+        last_err = ((r.stderr or r.stdout) or "")[-300:]
+        if attempt < 2:
+            time.sleep(3)
+    raise RuntimeError("capture failed: %s" % last_err)
 
 
-def capture_and_report(ser, client, cfg):
+def _capture_and_report(ser, client, cfg):
     """Sub-thread: photo -> OCR -> plate DB match -> report + send back to STM32."""
     try:
         t0 = time.time()
@@ -120,6 +132,23 @@ def capture_and_report(ser, client, cfg):
     except Exception as e:
         print("[GW] capture error: %s" % e, flush=True)
         send_serial(ser, "PLATE:NONE")
+
+
+
+def capture_and_report(ser, client, cfg):
+    """Serialize camera access: only one photo+OCR at a time."""
+    if not CAPTURE_STATE["lock"].acquire(blocking=False):
+        CAPTURE_STATE["pending"] = True
+        print("[GW] capture busy, queued one pending trigger", flush=True)
+        return
+    try:
+        _capture_and_report(ser, client, cfg)
+    finally:
+        CAPTURE_STATE["lock"].release()
+        if CAPTURE_STATE["pending"]:
+            CAPTURE_STATE["pending"] = False
+            threading.Thread(target=capture_and_report, args=(ser, client, cfg),
+                             daemon=True).start()
 
 
 def complete_command(cmd_name):
