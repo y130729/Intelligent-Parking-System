@@ -660,19 +660,9 @@
               <FilePath>.\User\main.c</FilePath>
             </File>
             <File>
-              <FileName>stm32f10x_conf.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\User\stm32f10x_conf.h</FilePath>
-            </File>
-            <File>
               <FileName>stm32f10x_it.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\User\stm32f10x_it.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f10x_it.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\User\stm32f10x_it.h</FilePath>
             </File>
             <File>
               <FileName>cc2530_parser.c</FileName>
@@ -710,19 +700,9 @@
               <FilePath>.\Hardware\pi_link.c</FilePath>
             </File>
             <File>
-              <FileName>esp8266.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\esp8266.h</FilePath>
-            </File>
-            <File>
               <FileName>Infrared.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\Infrared.c</FilePath>
-            </File>
-            <File>
-              <FileName>Infrared.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\Infrared.h</FilePath>
             </File>
             <File>
               <FileName>MFRC522.c</FileName>
@@ -730,24 +710,9 @@
               <FilePath>.\Hardware\MFRC522.c</FilePath>
             </File>
             <File>
-              <FileName>MFRC522.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\MFRC522.h</FilePath>
-            </File>
-            <File>
               <FileName>OLED.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\OLED.c</FilePath>
-            </File>
-            <File>
-              <FileName>OLED.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\OLED.h</FilePath>
-            </File>
-            <File>
-              <FileName>OLED_Font.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\OLED_Font.h</FilePath>
             </File>
             <File>
               <FileName>Serial.c</FileName>
@@ -755,19 +720,9 @@
               <FilePath>.\Hardware\Serial.c</FilePath>
             </File>
             <File>
-              <FileName>Serial.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\Serial.h</FilePath>
-            </File>
-            <File>
               <FileName>Servo.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\Servo.c</FilePath>
-            </File>
-            <File>
-              <FileName>Servo.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\Servo.h</FilePath>
             </File>
             <File>
               <FileName>USART.c</FileName>
@@ -775,19 +730,9 @@
               <FilePath>.\Hardware\USART.c</FilePath>
             </File>
             <File>
-              <FileName>USART.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\USART.h</FilePath>
-            </File>
-            <File>
               <FileName>flash_storage.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\flash_storage.c</FilePath>
-            </File>
-            <File>
-              <FileName>flash_storage.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\flash_storage.h</FilePath>
             </File>
           </Files>
         </Group>
