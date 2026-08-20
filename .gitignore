@@ -28,5 +28,5 @@ Thumbs.db
 .DS_Store
 *.tmp# ---- Keil user-specific files ----
 *.uvoptx
-*.uvguix
+*.uvguix.*
 
