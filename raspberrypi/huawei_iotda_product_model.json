@@ -1,0 +1,246 @@
+﻿{
+  "services": [
+    {
+      "service_id": "Spot_state",
+      "service_type": "Spot_state",
+      "description": "车位状态与刷卡信息上报",
+      "properties": [
+        {
+          "property_name": "Parking_id",
+          "data_type": "string",
+          "required": true,
+          "enum_list": [],
+          "min": "",
+          "max": "",
+          "max_length": 4,
+          "step": 0,
+          "unit": "",
+          "method": "RW",
+          "description": "车位号，如 1",
+          "default_value": "1"
+        },
+        {
+          "property_name": "Parking_state",
+          "data_type": "enum",
+          "required": true,
+          "enum_list": ["empty", "occupied"],
+          "min": "",
+          "max": "",
+          "max_length": 10,
+          "step": 0,
+          "unit": "",
+          "method": "RW",
+          "description": "车位占用状态",
+          "default_value": "empty"
+        },
+        {
+          "property_name": "remaining_spots",
+          "data_type": "int",
+          "required": true,
+          "enum_list": [],
+          "min": "0",
+          "max": "20",
+          "max_length": 0,
+          "step": 1,
+          "unit": "个",
+          "method": "RW",
+          "description": "剩余车位数",
+          "default_value": "0"
+        },
+        {
+          "property_name": "card_id",
+          "data_type": "string",
+          "required": false,
+          "enum_list": [],
+          "min": "",
+          "max": "",
+          "max_length": 16,
+          "step": 0,
+          "unit": "",
+          "method": "RW",
+          "description": "刷卡卡号(十六进制)",
+          "default_value": ""
+        }
+      ],
+      "commands": [],
+      "events": []
+    },
+    {
+      "service_id": "ParkingBarrier",
+      "service_type": "ParkingBarrier",
+      "description": "道闸状态上报与控制命令",
+      "properties": [
+        {
+          "property_name": "barrier_state",
+          "data_type": "enum",
+          "required": true,
+          "enum_list": ["up", "down", "opening", "closing"],
+          "min": "",
+          "max": "",
+          "max_length": 10,
+          "step": 0,
+          "unit": "",
+          "method": "RW",
+          "description": "道闸状态",
+          "default_value": "down"
+        }
+      ],
+      "commands": [
+        {
+          "command_name": "open_barrier",
+          "description": "打开道闸",
+          "paras": [],
+          "responses": [
+            {
+              "response_name": "open_barrier",
+              "description": "开闸执行结果",
+              "paras": [
+                {
+                  "name": "result",
+                  "data_type": "string",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "",
+                  "max": "",
+                  "max_length": 16,
+                  "step": 0,
+                  "unit": "",
+                  "description": "执行结果 success/failed",
+                  "default_value": ""
+                },
+                {
+                  "name": "barrier_state",
+                  "data_type": "string",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "",
+                  "max": "",
+                  "max_length": 10,
+                  "step": 0,
+                  "unit": "",
+                  "description": "道闸当前状态",
+                  "default_value": ""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "command_name": "close_barrier",
+          "description": "关闭道闸",
+          "paras": [],
+          "responses": [
+            {
+              "response_name": "close_barrier",
+              "description": "关闸执行结果",
+              "paras": [
+                {
+                  "name": "result",
+                  "data_type": "string",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "",
+                  "max": "",
+                  "max_length": 16,
+                  "step": 0,
+                  "unit": "",
+                  "description": "执行结果 success/failed",
+                  "default_value": ""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "command_name": "query_status",
+          "description": "查询系统状态",
+          "paras": [],
+          "responses": [
+            {
+              "response_name": "query_status",
+              "description": "系统状态查询结果",
+              "paras": [
+                {
+                  "name": "result",
+                  "data_type": "string",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "",
+                  "max": "",
+                  "max_length": 16,
+                  "step": 0,
+                  "unit": "",
+                  "description": "执行结果 success/failed",
+                  "default_value": ""
+                },
+                {
+                  "name": "remaining_spots",
+                  "data_type": "int",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "0",
+                  "max": "20",
+                  "max_length": 0,
+                  "step": 1,
+                  "unit": "个",
+                  "description": "剩余车位数",
+                  "default_value": ""
+                },
+                {
+                  "name": "plate_number",
+                  "data_type": "string",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "",
+                  "max": "",
+                  "max_length": 8,
+                  "step": 0,
+                  "unit": "",
+                  "description": "最近识别车牌",
+                  "default_value": ""
+                },
+                {
+                  "name": "barrier_state",
+                  "data_type": "string",
+                  "required": false,
+                  "enum_list": [],
+                  "min": "",
+                  "max": "",
+                  "max_length": 10,
+                  "step": 0,
+                  "unit": "",
+                  "description": "道闸当前状态",
+                  "default_value": ""
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "service_id": "PlateRecognition",
+      "service_type": "PlateRecognition",
+      "description": "车牌识别结果上报",
+      "properties": [
+        {
+          "property_name": "plate_number",
+          "data_type": "string",
+          "required": true,
+          "enum_list": [],
+          "min": "",
+          "max": "",
+          "max_length": 8,
+          "step": 0,
+          "unit": "",
+          "method": "R",
+          "description": "识别到的车牌号，如 T234J5",
+          "default_value": ""
+        }
+      ],
+      "commands": [],
+      "events": []
+    }
+  ]
+}

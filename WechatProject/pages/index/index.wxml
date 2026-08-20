@@ -1,0 +1,84 @@
+<view class="page-shell">
+  <view class="overview-band">
+    <view class="overview-main">
+      <view class="cloud-row">
+        <view class="status-dot {{connectionClass}}"></view>
+        <text>{{connectionText}}</text>
+      </view>
+      <text class="parking-name">{{overview.parking_name}}</text>
+      <text class="parking-address">{{overview.address}}</text>
+    </view>
+    <button class="refresh-button" loading="{{isLoading}}" bindtap="refreshOverview">刷新</button>
+  </view>
+
+  <view class="metric-grid">
+    <view class="metric-cell highlight">
+      <text class="metric-label">剩余车位</text>
+      <text class="metric-value">{{overview.remaining_spots}}</text>
+    </view>
+    <view class="metric-cell">
+      <text class="metric-label">总车位</text>
+      <text class="metric-value">{{overview.total_spots}}</text>
+    </view>
+    <view class="metric-cell">
+      <text class="metric-label">占用率</text>
+      <text class="metric-value">{{occupancyRate}}%</text>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="notice-row">
+      <view>
+        <text class="notice-title">云平台通知</text>
+        <text class="notice-text">{{lastNotice}}</text>
+      </view>
+      <text class="notice-time">{{lastSyncText}}</text>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">车位地图</text>
+      <view class="legend">
+        <view class="legend-item">
+          <view class="status-dot empty"></view>
+          <text>空闲</text>
+        </view>
+        <view class="legend-item">
+          <view class="status-dot occupied"></view>
+          <text>占用</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="filter-tabs">
+      <button
+        wx:for="{{filterTabs}}"
+        wx:key="value"
+        class="filter-tab {{item.activeClass}}"
+        data-filter="{{item.value}}"
+        bindtap="setFilter"
+      >
+        {{item.label}}
+      </button>
+    </view>
+
+    <view class="spot-grid">
+      <view
+        wx:for="{{visibleSpots}}"
+        wx:key="id"
+        class="spot-cell {{item.statusClass}}"
+        data-id="{{item.id}}"
+        bindtap="selectSpot"
+      >
+        <text class="spot-id">{{item.id}}</text>
+        <text class="spot-status">{{item.statusText}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section fee-band">
+    <text class="fee-title">收费标准</text>
+    <text class="fee-text">{{overview.fee_rule}}</text>
+  </view>
+</view>

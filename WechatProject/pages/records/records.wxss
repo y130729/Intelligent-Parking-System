@@ -1,0 +1,137 @@
+.records-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24rpx;
+  padding: 32rpx;
+  border-radius: 8rpx;
+  background: #ffffff;
+  box-shadow: 0 16rpx 36rpx rgba(16, 24, 40, 0.06);
+}
+
+.records-title,
+.records-copy {
+  display: block;
+}
+
+.records-title {
+  color: #101828;
+  font-size: 40rpx;
+  font-weight: 800;
+}
+
+.records-copy {
+  margin-top: 12rpx;
+  color: #667085;
+  font-size: 26rpx;
+  line-height: 1.5;
+}
+
+.refresh-records {
+  width: 112rpx;
+  min-height: 64rpx;
+  font-size: 24rpx;
+}
+
+.filter-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14rpx;
+  margin: 24rpx 0;
+}
+
+.filter-tab {
+  min-height: 68rpx;
+  color: #475467;
+  background: #ffffff;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.filter-tab.active {
+  color: #0f6848;
+  background: #dff3ea;
+}
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18rpx;
+}
+
+.record-item {
+  padding: 26rpx;
+  border-radius: 8rpx;
+  background: #ffffff;
+}
+
+.record-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-bottom: 22rpx;
+}
+
+.plate {
+  display: block;
+}
+
+.plate {
+  color: #101828;
+  font-size: 34rpx;
+  font-weight: 800;
+}
+
+.record-status {
+  flex-shrink: 0;
+  min-width: 100rpx;
+  padding: 10rpx 14rpx;
+  border-radius: 8rpx;
+  text-align: center;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.record-status.active {
+  color: #0f6848;
+  background: #dff3ea;
+}
+
+.record-status.completed {
+  color: #475467;
+  background: #eaecf0;
+}
+
+.record-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18rpx;
+}
+
+.label,
+.value {
+  display: block;
+}
+
+.label {
+  color: #98a2b3;
+  font-size: 23rpx;
+}
+
+.value {
+  margin-top: 6rpx;
+  color: #344054;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.empty-state {
+  margin-top: 24rpx;
+  padding: 42rpx 28rpx;
+  border-radius: 8rpx;
+  background: #ffffff;
+  color: #667085;
+  font-size: 28rpx;
+  text-align: center;
+}

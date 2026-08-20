@@ -1,0 +1,53 @@
+<view class="page-shell">
+  <view class="profile-panel">
+    <button class="avatar-button" open-type="chooseAvatar" bind:chooseavatar="onChooseAvatar">
+      <image class="avatar" src="{{userInfo.avatarUrl}}" mode="cover" />
+    </button>
+    <view class="profile-main">
+      <text class="profile-label">昵称</text>
+      <input
+        class="nickname-input"
+        type="nickname"
+        value="{{userInfo.nickName}}"
+        placeholder="微信昵称"
+        bindinput="onNicknameInput"
+      />
+      <text class="role-text">授权用户 · 可远程控制道闸</text>
+    </view>
+    <button class="ghost-button save-profile" bindtap="saveProfile">保存</button>
+  </view>
+
+  <view class="section form-panel">
+    <text class="section-title">车辆绑定</text>
+    <view class="field">
+      <text class="field-label">车牌号</text>
+      <input class="field-input" value="{{vehicle.plate_no}}" placeholder="例如 粤A12345" bindinput="onPlateInput" />
+    </view>
+    <view class="field">
+      <text class="field-label">卡号</text>
+      <input class="field-input" value="{{vehicle.card_id}}" placeholder="例如 CARD001" bindinput="onCardInput" />
+    </view>
+
+    <view class="notify-card">
+      <view>
+        <text class="notify-title">入场通知</text>
+        <text class="notify-desc">{{wechatBindText}} · 当前{{parkingStatusText}} · 小程序内提醒</text>
+      </view>
+      <text class="{{noticeStatusClass}}">{{noticeStatusText}}</text>
+    </view>
+
+    <button class="primary-button form-button" loading="{{savingVehicle}}" bindtap="saveVehicle">绑定车辆</button>
+  </view>
+
+  <view class="section form-panel">
+    <text class="section-title">意见反馈</text>
+    <textarea
+      class="feedback-input"
+      value="{{feedback}}"
+      maxlength="200"
+      placeholder="请输入问题或建议"
+      bindinput="onFeedbackInput"
+    ></textarea>
+    <button class="primary-button form-button" loading="{{submittingFeedback}}" bindtap="submitFeedback">提交反馈</button>
+  </view>
+</view>

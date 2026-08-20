@@ -1,0 +1,20 @@
+﻿车牌识别程序备份 (2026-08-18)
+来源: 树莓派 Zero WH (10.172.83.46) ~/parking_gateway
+
+文件:
+  plate_recognition.py  图片文件车牌识别 (带参数, 详见脚本头部注释)
+  plate_camera.py       拍照 -> 识别 -> 打印 (需 rpicam + 同目录 plate_recognition.py)
+  test.jpg              样例1 真实车牌 冀T·234J5  -> 期望 T234J5
+  test2.jpg             样例2 真实车牌 鄂E·M456U  -> 期望 EM456U
+  test3.jpg             样例3 真实车牌 湘K·4Z567  -> 期望 K4Z567
+
+运行(在树莓派上):
+  cd ~/parking_gateway && source .venv/bin/activate
+  python3 plate_recognition.py test.jpg test2.jpg test3.jpg
+  python3 plate_camera.py
+
+识别流程: HSV蓝色掩码 -> 候选轮廓(宽高比≈3.15) -> minAreaRect透视校正
+         -> CLAHE -> Tesseract LSTM(psm 8->13->7, 白名单A-Z0-9)
+         -> 校正图OCR为空时回退识别蓝色包围盒
+后处理: 6位子串按车牌特征打分选优(保护城市字母), 修正 T->7/1/8, Z->7 误读
+性能: 单张约 7-8s (拍照另需约 6s)

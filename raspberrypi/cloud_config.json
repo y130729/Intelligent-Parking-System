@@ -1,0 +1,14 @@
+{
+  "hostname": "53b674367f.st1.iotda-device.cn-south-1.myhuaweicloud.com",
+  "port": 8883,
+  "protocol": "MQTTS",
+  "device_id": "6a85594cc00ccb6d4b701321_raspberrypi-zeroWH",
+  "client_id": "6a85594cc00ccb6d4b701321_raspberrypi-zeroWH_0_0_2026081907",
+  "username": "6a85594cc00ccb6d4b701321_raspberrypi-zeroWH",
+  "password": "f08944eb96d9fc724e05c8acef9c498b1ffcccc06f7cac1f1dcd2a3f09384ee7",
+  "ca_cert": "/etc/ssl/certs/ca-certificates.crt",
+  "test_report": {
+    "service_id": "Spot_state",
+    "properties": {"remaining_spots": 20}
+  }
+}

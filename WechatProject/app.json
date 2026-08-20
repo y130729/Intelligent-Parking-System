@@ -1,0 +1,45 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/records/records",
+    "pages/mine/mine",
+    "pages/logs/logs"
+  ],
+  "subPackages": [],
+  "window": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "智慧停车",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f5f7f6"
+  },
+  "tabBar": {
+    "color": "#667085",
+    "selectedColor": "#0f8a5f",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "车位",
+        "iconPath": "assets/tab/parking.png",
+        "selectedIconPath": "assets/tab/parking-active.png"
+      },
+      {
+        "pagePath": "pages/records/records",
+        "text": "记录",
+        "iconPath": "assets/tab/records.png",
+        "selectedIconPath": "assets/tab/records-active.png"
+      },
+      {
+        "pagePath": "pages/mine/mine",
+        "text": "我的",
+        "iconPath": "assets/tab/mine.png",
+        "selectedIconPath": "assets/tab/mine-active.png"
+      }
+    ]
+  },
+  "style": "v2",
+  "componentFramework": "glass-easel",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

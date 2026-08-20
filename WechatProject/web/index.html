@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智慧停车本地控制台</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <img src="../assets/tab/parking-active.png" alt="" class="brand-icon">
+        <div>
+          <h1>智慧停车本地控制台</h1>
+          <p id="connectionText">本地模拟</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="refreshBtn" class="ghost-btn" type="button">刷新</button>
+        <button id="settingsBtn" class="primary-btn" type="button">配置</button>
+      </div>
+    </header>
+
+    <section class="overview">
+      <div class="overview-main">
+        <span class="status-pill" id="statusPill">本地模拟</span>
+        <h2 id="parkingName">广东工业大学智慧停车场</h2>
+        <p id="parkingAddress">广东工业大学大学城校区西门停车区</p>
+      </div>
+      <div class="notice" id="noticeText">等待车位数据</div>
+    </section>
+
+    <section class="metric-grid">
+      <article class="metric primary">
+        <span>剩余车位</span>
+        <strong id="remainingCount">--</strong>
+      </article>
+      <article class="metric">
+        <span>总车位</span>
+        <strong id="totalCount">--</strong>
+      </article>
+      <article class="metric">
+        <span>占用率</span>
+        <strong id="occupancyRate">--</strong>
+      </article>
+      <article class="metric">
+        <span>道闸状态</span>
+        <strong id="barrierState">--</strong>
+      </article>
+    </section>
+
+    <section class="workspace">
+      <article class="panel map-panel">
+        <div class="panel-head">
+          <h3>车位地图</h3>
+          <div class="legend">
+            <span><i class="dot empty"></i>空闲</span>
+            <span><i class="dot occupied"></i>占用</span>
+          </div>
+        </div>
+        <div class="segmented" id="filterTabs">
+          <button class="active" type="button" data-filter="all">全部</button>
+          <button type="button" data-filter="empty">空闲</button>
+          <button type="button" data-filter="occupied">占用</button>
+        </div>
+        <div class="spot-grid" id="spotGrid"></div>
+      </article>
+
+      <aside class="side-column">
+        <article class="panel">
+          <div class="panel-head">
+            <h3>远程控制</h3>
+            <span class="muted" id="commandHint">open_barrier</span>
+          </div>
+          <button id="openBarrierBtn" class="open-btn" type="button">远程开闸</button>
+          <div class="response-box" id="commandState">道闸待命</div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h3>操作记录</h3>
+            <button id="clearLogsBtn" class="link-btn" type="button">清空</button>
+          </div>
+          <div class="log-list" id="logList"></div>
+        </article>
+      </aside>
+    </section>
+
+    <section class="panel records-panel">
+      <div class="panel-head">
+        <h3>停车记录</h3>
+        <span class="muted">全场出入记录</span>
+      </div>
+      <div class="record-list" id="recordList"></div>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <form method="dialog" class="settings-form">
+      <div class="dialog-head">
+        <h3>华为云本地代理配置</h3>
+        <button class="icon-btn" value="cancel" aria-label="关闭" type="submit">×</button>
+      </div>
+      <p class="form-note">真实访问请先运行本地 Node 代理；不填写参数时会优先使用小程序配置文件里的华为云参数。</p>
+
+      <label class="switch-row">
+        <input id="useMockInput" type="checkbox">
+        <span>使用本地模拟</span>
+      </label>
+
+      <div class="form-grid">
+        <label>
+          <span>IAM Endpoint</span>
+          <input id="iamEndpointInput" type="url" autocomplete="off">
+        </label>
+        <label>
+          <span>IoTDA 应用接入 HTTPS 地址</span>
+          <input id="iotdaEndpointInput" type="url" autocomplete="off">
+        </label>
+        <label>
+          <span>Project ID</span>
+          <input id="projectIdInput" type="text" autocomplete="off">
+        </label>
+        <label>
+          <span>Domain Name / 账号名</span>
+          <input id="domainNameInput" type="text" autocomplete="off">
+        </label>
+        <label>
+          <span>IAM 用户名</span>
+          <input id="iamUserNameInput" type="text" autocomplete="off">
+        </label>
+        <label>
+          <span>IAM 密码</span>
+          <input id="iamPasswordInput" type="password" autocomplete="off">
+        </label>
+        <label>
+          <span>Device ID</span>
+          <input id="deviceIdInput" type="text" autocomplete="off">
+        </label>
+        <label>
+          <span>Instance ID 可留空</span>
+          <input id="instanceIdInput" type="text" autocomplete="off">
+        </label>
+      </div>
+
+      <div class="dialog-actions">
+        <button id="testCloudBtn" class="ghost-btn" type="button">测试连接</button>
+        <button id="saveSettingsBtn" class="primary-btn" value="default" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="./app.js?v=20260615-real-sync-v4"></script>
+</body>
+</html>

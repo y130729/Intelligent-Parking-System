@@ -1,0 +1,54 @@
+<view class="page-shell">
+  <view class="records-head">
+    <view>
+      <text class="records-title">进出场历史</text>
+      <text class="records-copy">车辆入场、离场、停车时长与费用记录</text>
+    </view>
+    <button class="ghost-button refresh-records" loading="{{isLoading}}" bindtap="loadRecords">刷新</button>
+  </view>
+
+  <view class="filter-tabs">
+    <button
+      wx:for="{{filterTabs}}"
+      wx:key="value"
+      class="filter-tab {{item.activeClass}}"
+      data-filter="{{item.value}}"
+      bindtap="setFilter"
+    >
+      {{item.label}}
+    </button>
+  </view>
+
+  <view class="record-list">
+    <view wx:for="{{visibleRecords}}" wx:key="id" class="record-item">
+      <view class="record-top">
+        <view>
+          <text class="plate">{{item.plate_no}}</text>
+        </view>
+        <text class="record-status {{item.statusClass}}">{{item.statusText}}</text>
+      </view>
+      <view class="record-grid">
+        <view>
+          <text class="label">入场</text>
+          <text class="value">{{item.entryText}}</text>
+        </view>
+        <view>
+          <text class="label">离场</text>
+          <text class="value">{{item.exitText}}</text>
+        </view>
+        <view>
+          <text class="label">时长</text>
+          <text class="value">{{item.durationText}}</text>
+        </view>
+        <view>
+          <text class="label">费用</text>
+          <text class="value">{{item.feeText}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{!hasVisibleRecords}}" class="empty-state">
+    <text>{{emptyText}}</text>
+  </view>
+</view>

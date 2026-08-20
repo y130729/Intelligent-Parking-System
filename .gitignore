@@ -1,0 +1,29 @@
+# ---- IAR (CC2530 Z-Stack) build output ----
+**/Obj/
+**/List/
+**/Exe/
+**/bin/
+# ---- Keil (STM32) build output ----
+**/Objects/
+**/Listings/
+# ---- compiler intermediate / debug files ----
+*.o
+*.d
+*.crf
+*.lst
+*.lnp
+*.dep
+*.pbi
+*.pbd
+*.axf
+*.map
+*.r51
+*.s51
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+# ---- misc ----
+Thumbs.db
+.DS_Store
+*.tmp
