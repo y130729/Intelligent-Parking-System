@@ -47,3 +47,4 @@
 /* Global Variables Declaration */
 extern uint8_t spot_occupied[MAX_SPOT_ID];
 extern uint8_t ultrasonic_new_data_flag;
+

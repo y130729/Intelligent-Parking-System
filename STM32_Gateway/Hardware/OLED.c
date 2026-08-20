@@ -319,3 +319,82 @@ void OLED_Init(void)
 		
 	OLED_Clear();				//OLED清屏
 }
+/**
+  * @brief  OLED显示16x16汉字
+  * @param  Line 行位置,范围1~4
+  * @param  Column 列位置,范围1~8(汉字宽16像素)
+  * @param  Num 汉字在OLED_CN16x16字库中的索引,范围0~OLED_CN_COUNT-1
+  * @retval 无
+  */
+void OLED_ShowCN(uint8_t Line, uint8_t Column, uint8_t Num)
+{
+	uint8_t i;
+	OLED_SetCursor((Line - 1) * 2, (Column - 1) * 16);
+	for (i = 0; i < 16; i ++)
+	{
+		OLED_WriteData(OLED_CN16x16[Num][i]);
+	}
+	OLED_SetCursor((Line - 1) * 2 + 1, (Column - 1) * 16);
+	for (i = 16; i < 32; i ++)
+	{
+		OLED_WriteData(OLED_CN16x16[Num][i]);
+	}
+}
+
+/**
+  * @brief  查询汉字在字库中的索引,支持GB2312双字节与UTF-8三字节
+  * @param  Str 指向汉字编码首字节
+  * @param  IsUTF8 1=UTF-8,0=GB2312
+  * @retval 索引,未收录返回0xFF
+  */
+uint8_t OLED_CN_FindIndex(uint8_t *Str, uint8_t IsUTF8)
+{
+	uint8_t i, j;
+	uint8_t len = IsUTF8 ? 3 : 2;
+	for (i = 0; i < OLED_CN_COUNT; i ++)
+	{
+		const uint8_t *table = IsUTF8 ? OLED_CN_UTF8[i] : OLED_CN_GBK[i];
+		for (j = 0; j < len; j ++)
+		{
+			if (table[j] != Str[j]) { break; }
+		}
+		if (j == len) { return i; }
+	}
+	return 0xFF;
+}
+
+/**
+  * @brief  OLED显示中英混排字符串
+  * @param  Line 行位置,范围1~4
+  * @param  Column 列位置,范围1~16(英文宽8像素)
+  * @param  String 要显示的字符串,支持GB2312/UTF-8中文与ASCII
+  * @retval 无
+  */
+void OLED_ShowCNString(uint8_t Line, uint8_t Column, char *String)
+{
+	uint8_t i = 0;
+	while (String[i] != '\0')
+	{
+		uint8_t c = (uint8_t)String[i];
+		if (c >= 0xE0)
+		{
+			uint8_t Num = OLED_CN_FindIndex((uint8_t *)&String[i], 1);
+			if (Num != 0xFF) { OLED_ShowCN(Line, Column, Num); }
+			i += 3;
+			Column += 2;
+		}
+		else if (c >= 0x80)
+		{
+			uint8_t Num = OLED_CN_FindIndex((uint8_t *)&String[i], 0);
+			if (Num != 0xFF) { OLED_ShowCN(Line, Column, Num); }
+			i += 2;
+			Column += 2;
+		}
+		else
+		{
+			OLED_ShowChar(Line, Column, String[i]);
+			i ++;
+			Column ++;
+		}
+	}
+}

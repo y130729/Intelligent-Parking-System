@@ -10,4 +10,10 @@ void OLED_ShowSignedNum(uint8_t Line, uint8_t Column, int32_t Number, uint8_t Le
 void OLED_ShowHexNum(uint8_t Line, uint8_t Column, uint32_t Number, uint8_t Length);
 void OLED_ShowBinNum(uint8_t Line, uint8_t Column, uint32_t Number, uint8_t Length);
 
+void OLED_DisplayPlateNumber(const char *plate);
+
+void OLED_ShowCN(uint8_t Line, uint8_t Column, uint8_t Num);
+uint8_t OLED_CN_FindIndex(uint8_t *Str, uint8_t IsUTF8);
+void OLED_ShowCNString(uint8_t Line, uint8_t Column, char *String);
+
 #endif

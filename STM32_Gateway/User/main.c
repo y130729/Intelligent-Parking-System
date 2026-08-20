@@ -19,6 +19,7 @@ void System_Init(void);
 void OLED_DisplayRemainingSpots(void);
 void ProcessUltrasonicData(void);
 void ProcessPendingSpotUpdate(void);
+void OLED_DisplayPlateNumber(const char *plate);
 
 uint8_t spot_occupied[MAX_SPOT_ID] = {0};
 uint8_t ultrasonic_new_data_flag = 0;
@@ -83,6 +84,7 @@ void System_Init(void)
 #endif
     
     OLED_ShowString(3, 1, "System Ready   ");
+    OLED_DisplayPlateNumber(NULL);  // 预留第4行显示车牌号（占位，收到树莓派车牌后刷新）
     USART_Printf("System Init OK\r\n");
     USART_Printf("Total spots: %d\r\n", TOTAL_SPOTS);
     USART_Printf("CC2530 Coordinator connected via USART3\r\n");
@@ -110,6 +112,20 @@ void OLED_DisplayRemainingSpots(void)
         OLED_ShowString(2, 1, spot_str);
         last_available = available_spots;
     }
+}
+void OLED_DisplayPlateNumber(const char *plate)
+{
+    static char current_plate[16] = "------";
+    static char plate_line[24];
+
+    if (plate != NULL)
+    {
+        strncpy(current_plate, plate, sizeof(current_plate) - 1);
+        current_plate[sizeof(current_plate) - 1] = '\0';
+    }
+    OLED_ShowString(4, 1, "                ");
+    sprintf(plate_line, "Plate:%s", current_plate);
+    OLED_ShowCNString(4, 1, plate_line);
 }
 
 void ProcessUltrasonicData(void)
