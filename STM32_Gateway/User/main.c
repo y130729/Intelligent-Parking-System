@@ -88,6 +88,7 @@ void System_Init(void)
     /* cloud via ESP8266 */
 #else
     PI_UART_SendString("LINK:OK\r\n");
+    StateMachine_UpdateRemainingSpots(TOTAL_SPOTS);
 #endif
     OLED_DisplayPlateNumber(NULL);  // 预留第4行显示车牌号（占位，收到树莓派车牌后刷新）
     USART_Printf("System Init OK\r\n");
@@ -188,6 +189,18 @@ void ProcessPendingSpotUpdate(void)
             PI_UART_SendString(pi_buf);
         }
 #endif
+        /* sync remaining spot count to Pi after each change */
+        {
+            uint8_t occupied_count = 0;
+            for (uint8_t i = 0; i < MAX_SPOT_ID; i++)
+            {
+                if (spot_occupied[i])
+                {
+                    occupied_count++;
+                }
+            }
+            StateMachine_UpdateRemainingSpots((uint8_t)(MAX_SPOT_ID - occupied_count));
+        }
     }
 }
 

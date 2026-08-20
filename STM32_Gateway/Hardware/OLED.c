@@ -326,18 +326,26 @@ void OLED_Init(void)
   * @param  Num 汉字在OLED_CN16x16字库中的索引,范围0~OLED_CN_COUNT-1
   * @retval 无
   */
+static uint8_t OLED_ReverseBits(uint8_t b)
+{
+	b = (uint8_t)((b >> 4) | (b << 4));
+	b = (uint8_t)(((b & 0xCC) >> 2) | ((b & 0x33) << 2));
+	b = (uint8_t)(((b & 0xAA) >> 1) | ((b & 0x55) << 1));
+	return b;
+}
+
 void OLED_ShowCN(uint8_t Line, uint8_t Column, uint8_t Num)
 {
 	uint8_t i;
 	OLED_SetCursor((Line - 1) * 2, (Column - 1) * 16);
 	for (i = 0; i < 16; i ++)
 	{
-		OLED_WriteData(OLED_CN16x16[Num][i]);
+		OLED_WriteData(OLED_ReverseBits(OLED_CN16x16[Num][15 - i]));
 	}
 	OLED_SetCursor((Line - 1) * 2 + 1, (Column - 1) * 16);
 	for (i = 16; i < 32; i ++)
 	{
-		OLED_WriteData(OLED_CN16x16[Num][i]);
+		OLED_WriteData(OLED_ReverseBits(OLED_CN16x16[Num][47 - i]));
 	}
 }
 
