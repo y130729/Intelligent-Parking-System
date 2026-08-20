@@ -19,4 +19,6 @@ void StateMachine_Process(void);
 void StateMachine_SetVehicleArrive(void);
 void StateMachine_UpdateRemainingSpots(uint8_t count);
 
+void StateMachine_RemoteOpen(void);
+void StateMachine_RemoteClose(void);
 #endif /* __STATE_MACHINE_H */

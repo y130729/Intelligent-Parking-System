@@ -61,6 +61,35 @@ void StateMachine_UpdateRemainingSpots(uint8_t count)
 #endif
 }
 
+
+void StateMachine_RemoteOpen(void)
+{
+    current_state = STATE_BARRIER_UP;
+    state_timer = 0;
+    Servo_Up();
+    OLED_ShowString(3, 1, "Entry Allowed   ");
+    USART_Printf("Remote: opening barrier\r\n");
+#if WIFI_ENABLE
+    ESP8266_SendToClient("BARRIER:OPEN");
+#else
+    PI_UART_SendString("BARRIER:OPEN\r\n");
+#endif
+}
+
+void StateMachine_RemoteClose(void)
+{
+    current_state = STATE_BARRIER_DOWN;
+    state_timer = 0;
+    Servo_Down();
+    OLED_ShowString(3, 1, "Closing Barrier ");
+    USART_Printf("Remote: closing barrier\r\n");
+#if WIFI_ENABLE
+    ESP8266_SendToClient("BARRIER:CLOSE");
+#else
+    PI_UART_SendString("BARRIER:CLOSE\r\n");
+#endif
+}
+
 void StateMachine_Process(void)
 {
     uint8_t card_id[MAX_CARD_ID_LENGTH];
@@ -76,6 +105,11 @@ void StateMachine_Process(void)
                 state_timer = 0;
                 OLED_ShowString(3, 1, "Please Swipe Card");
                 USART_Printf("Vehicle arrived, waiting for RFID...\r\n");
+#if WIFI_ENABLE
+                ESP8266_SendToClient("CAPTURE");
+#else
+                PI_UART_SendString("CAPTURE\r\n");
+#endif
             }
             break;
             
@@ -134,6 +168,11 @@ void StateMachine_Process(void)
                     OLED_ShowString(3, 1, "Entry Allowed   ");
                     USART_Printf("Card valid, opening barrier...\r\n");
                     Servo_Up();
+#if WIFI_ENABLE
+                    ESP8266_SendToClient("BARRIER:OPEN");
+#else
+                    PI_UART_SendString("BARRIER:OPEN\r\n");
+#endif
 
                 }
                 else
@@ -163,6 +202,11 @@ void StateMachine_Process(void)
                 current_state = STATE_BARRIER_DOWN;
                 state_timer = 0;
                 Servo_Down();
+#if WIFI_ENABLE
+                ESP8266_SendToClient("BARRIER:CLOSE");
+#else
+                PI_UART_SendString("BARRIER:CLOSE\r\n");
+#endif
                 OLED_ShowString(3, 1, "Closing Barrier ");
             }
             break;

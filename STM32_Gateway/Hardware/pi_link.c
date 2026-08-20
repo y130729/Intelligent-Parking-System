@@ -1,5 +1,7 @@
 #include "pi_link.h"
 #include "USART.h"
+#include "OLED.h"
+#include "state_machine.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -98,6 +100,30 @@ void PI_UART_Process(void)
     pi_rx_line[PI_RX_BUF_SIZE - 1] = '\0';
     USART_Printf("PI_RX: %s\r\n", pi_rx_line);
 
-    /* Reserved: parse commands from Raspberry Pi here, e.g.
-       "PLATE:<plate>" to show result, "OPEN"/"CLOSE" for remote barrier. */
+    /* Commands from Raspberry Pi:
+       "PLATE:<plate>"  -> display recognized plate on OLED line 4
+       "PLATE:NONE"     -> clear plate display
+       "OPEN"/"CLOSE"   -> remote barrier control */
+    if (strncmp(pi_rx_line, "PLATE:", 6) == 0)
+    {
+        char *plate = &pi_rx_line[6];
+        if (strcmp(plate, "NONE") == 0)
+        {
+            OLED_DisplayPlateNumber("------");
+        }
+        else
+        {
+            OLED_DisplayPlateNumber(plate);
+        }
+    }
+    else if (strcmp(pi_rx_line, "OPEN") == 0)
+    {
+        USART_Printf("Remote command: open barrier\r\n");
+        StateMachine_RemoteOpen();
+    }
+    else if (strcmp(pi_rx_line, "CLOSE") == 0)
+    {
+        USART_Printf("Remote command: close barrier\r\n");
+        StateMachine_RemoteClose();
+    }
 }

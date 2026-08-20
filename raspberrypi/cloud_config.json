@@ -7,8 +7,12 @@
   "username": "6a85594cc00ccb6d4b701321_raspberrypi-zeroWH",
   "password": "f08944eb96d9fc724e05c8acef9c498b1ffcccc06f7cac1f1dcd2a3f09384ee7",
   "ca_cert": "/etc/ssl/certs/ca-certificates.crt",
+  "serial_port": "/dev/serial0",
+  "serial_baud": 115200,
   "test_report": {
     "service_id": "Spot_state",
-    "properties": {"remaining_spots": 20}
+    "properties": {
+      "remaining_spots": 20
+    }
   }
 }
