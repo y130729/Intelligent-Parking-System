@@ -84,6 +84,11 @@ void System_Init(void)
 #endif
     
     OLED_ShowString(3, 1, "System Ready   ");
+#if WIFI_ENABLE
+    /* cloud via ESP8266 */
+#else
+    PI_UART_SendString("LINK:OK\r\n");
+#endif
     OLED_DisplayPlateNumber(NULL);  // 预留第4行显示车牌号（占位，收到树莓派车牌后刷新）
     USART_Printf("System Init OK\r\n");
     USART_Printf("Total spots: %d\r\n", TOTAL_SPOTS);

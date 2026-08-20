@@ -163,6 +163,8 @@ def handle_stm32_line(ser, client, cfg, line):
         report_property(client, cfg["device_id"], "ParkingBarrier",
                         {"barrier_state": "down"})
         complete_command("close_barrier")
+    elif line == "LINK:OK":
+        print("[GW] STM32 link OK", flush=True)
     elif line == "CAPTURE":
         threading.Thread(target=capture_and_report, args=(ser, client, cfg),
                          daemon=True).start()
