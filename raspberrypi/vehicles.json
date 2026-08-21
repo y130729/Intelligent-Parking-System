@@ -1,0 +1,20 @@
+[
+  {
+    "plate": "冀T234J5",
+    "cards": ["7506D506"],
+    "owner": "张三",
+    "type": "fixed"
+  },
+  {
+    "plate": "鄂EM456U",
+    "cards": [],
+    "owner": "李四",
+    "type": "fixed"
+  },
+  {
+    "plate": "湘K4Z567",
+    "cards": [],
+    "owner": "王五",
+    "type": "fixed"
+  }
+]

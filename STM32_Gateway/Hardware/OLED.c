@@ -340,12 +340,12 @@ void OLED_ShowCN(uint8_t Line, uint8_t Column, uint8_t Num)
 	OLED_SetCursor((Line - 1) * 2, (Column - 1) * 16);
 	for (i = 0; i < 16; i ++)
 	{
-		OLED_WriteData(OLED_ReverseBits(OLED_CN16x16[Num][15 - i]));
+		OLED_WriteData(OLED_ReverseBits(OLED_CN16x16[Num][i]));
 	}
 	OLED_SetCursor((Line - 1) * 2 + 1, (Column - 1) * 16);
 	for (i = 16; i < 32; i ++)
 	{
-		OLED_WriteData(OLED_ReverseBits(OLED_CN16x16[Num][47 - i]));
+		OLED_WriteData(OLED_ReverseBits(OLED_CN16x16[Num][i]));
 	}
 }
 

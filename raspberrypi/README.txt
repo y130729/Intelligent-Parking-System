@@ -4,10 +4,11 @@ Backup consolidated: 2026-08-19
 
 Current files (deployed on Pi):
   plate_gateway.py      integrated gateway: MQTT cloud + FIFO trigger + camera OCR
-                        + plate DB match + property report (main program)
+                        + vehicle registry + plate/card auto-open (OR) + event log
   plate_recognition.py  OCR pipeline (patched, uses plate_matcher)
-  plate_matcher.py      plate DB fuzzy matcher (weighted edit distance)
-  plate_db.json         known plates; add lines to extend
+  plate_matcher.py      plate fuzzy matcher (weighted edit distance, reads vehicles.json)
+  vehicles.json         vehicle registry: plate + bound cards + owner (authoritative)
+  events.jsonl          passage event log (runtime, auto-created)
   cloud_config.json     Huawei IoTDA MQTT connection config (MQTTS 8883)
   plate_camera.py       manual capture -> recognize tool
   huawei_iotda_product_model.json  IoTDA product model export (reference)

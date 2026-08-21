@@ -29,4 +29,5 @@ Thumbs.db
 *.tmp# ---- Keil user-specific files ----
 *.uvoptx
 *.uvguix.*
-
+# ---- runtime logs ----
+events.jsonl

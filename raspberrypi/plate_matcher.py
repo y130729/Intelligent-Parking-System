@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plate_db.json")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vehicles.json")
 MIN_WIN = 5             # shortest sliding-window length to try
 MATCH_THRESHOLD = 0.80  # similarity >= this -> accept DB match
 
@@ -79,7 +79,10 @@ def load_db(path=None):
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if isinstance(data, dict):
+        data = data.get("vehicles", data.get("plates", []))
+    return data
 
 
 def _prep(entries):

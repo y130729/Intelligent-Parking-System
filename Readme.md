@@ -7,8 +7,8 @@
 本项目是基于物联网技术的智能停车场管理系统，采用 **ZigBee + 树莓派 + 华为云 MQTT** 的分层架构，实现车位实时检测、车辆进出管理、车牌识别与云端数据上报。
 
 - **CC2530 车位节点**：ZigBee 无线网络 + HC-SR04 超声波测距，周期上报车位占用状态
-- **STM32F103 网关**：串口汇聚、红外触发、RFID 刷卡验证、道闸控制、OLED 显示；不直接联网
-- **树莓派 Zero WH**：车牌拍照识别 + 华为云 MQTT 上报与命令中转
+- **STM32F103 网关**：串口汇聚、红外触发、RFID 刷卡验证、道闸控制、OLED 显示；与树莓派配合实现"车牌或刷卡任一凭证开闸"；不直接联网
+- **树莓派 Zero WH**：车牌拍照识别 + 车辆档案匹配自动开闸 + 华为云 MQTT 上报与命令中转
 - **华为云 IoTDA**：设备影子、属性上报、命令下发，供应用层（小程序等）使用
 
 ### 1.1 系统架构
@@ -63,21 +63,26 @@ HC-SR04 测距 -> CC2530 节点（每 100ms + 随机抖动）
 ### 2.2 车辆进出数据流
 
 ```
-红外遮挡（PA11 EXTI11）-> 状态机进入 WAITING_RFID
-  -> MFRC522 读卡 -> Flash 白名单验证
-  -> 有效且有车位：抬杆（BARRIER:OPEN）-> 3s 后落杆（BARRIER:CLOSE）
-  -> 无效卡 / 车位已满：提示后回 IDLE
-红外触发同时发送 CAPTURE -> 树莓派拍照识别 -> PLATE 回传 OLED 显示
+红外遮挡（PA11 EXTI11）-> 状态机进入 WAITING_RFID，同时发送 CAPTURE
+  -> 树莓派启动"单次过闸会话"（ARRIVAL），以下两个凭证并行等待：
+     ① 车牌：拍照识别 -> vehicles.json 档案命中 -> 树莓派发 OPEN 开闸
+     ② 刷卡：MFRC522 读卡 -> STM32 Flash 白名单验证通过 -> 直接抬杆
+  -> 任一凭证先命中即开闸一次（会话去重，记录 barrier_open_by_plate / card_hit）
+  -> 3s 后落杆（BARRIER:CLOSE）；无效卡 / 未登记车牌 / 车位已满：提示后回 IDLE
+  -> PLATE:<车牌> 回传 OLED 第 4 行显示
+离线兜底：树莓派/网络不可用时，STM32 本地刷卡白名单仍可开闸
 ```
 
 ### 2.3 车牌识别数据流
 
 ```
 CAPTURE（STM32 红外触发，或本地 echo capture > /tmp/plate_cmd）
+  -> 启动过闸会话（ARRIVAL）
   -> rpicam-still 拍照（2592x1944）
   -> HSV 蓝牌定位 -> minAreaRect 透视校正 -> CLAHE -> Tesseract OCR
-  -> 6 位窗口后处理 -> plate_db.json 模糊匹配
+  -> 6 位窗口后处理 -> vehicles.json 模糊匹配（相似度 >= 0.80 取档案内完整车牌）
   -> 上报 PlateRecognition.plate_number
+  -> 命中档案且会话未开闸：自动发 OPEN 开闸（记录 barrier_open_by_plate）；未命中记录 plate_unknown
   -> PLATE:<车牌> 回 STM32 -> OLED 第 4 行中文显示
 ```
 
@@ -155,11 +160,11 @@ CAPTURE（STM32 红外触发，或本地 echo capture > /tmp/plate_cmd）
 | 状态 | 描述 | 触发/退出 |
 |---|---|---|
 | `STATE_IDLE` | 空闲 | 红外遮挡 -> WAITING_RFID |
-| `STATE_WAITING_RFID` | 等待刷卡 | 读卡验证通过且有车位 -> BARRIER_UP；红外离开或验证失败回 IDLE |
+| `STATE_WAITING_RFID` | 等待刷卡/车牌 | 读卡白名单通过且有车位 -> BARRIER_UP；树莓派车牌命中发 OPEN 同样开闸；红外离开或验证失败回 IDLE |
 | `STATE_BARRIER_UP` | 抬杆 | 3s 后自动 -> BARRIER_DOWN |
 | `STATE_BARRIER_DOWN` | 落杆 | 1s 后 -> IDLE |
 
-RFID 验证流程：红外触发 -> 等待刷卡 -> MFRC522_Request/Anticoll 取卡号 -> `FlashStorage_IsCardValid` 查白名单（Flash 0x08007000，默认卡 7506D506）-> 有剩余车位则抬杆并回发 `BARRIER:OPEN`，无效卡/车位已满提示 3s 后回 IDLE
+RFID 验证流程（离线兜底）：红外触发 -> 等待刷卡 -> MFRC522_Request/Anticoll 取卡号 -> `FlashStorage_IsCardValid` 查白名单（Flash 0x08007000，默认卡 7506D506）-> 有剩余车位则抬杆并回发 `BARRIER:OPEN`，无效卡/车位已满提示 3s 后回 IDLE；车牌识别为并行第二凭证，树莓派侧 `ARRIVAL` 会话内任一凭证先命中即开闸一次（去重）
 
 OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 4 行 `Plate:<车牌>`（16x16 中文，方向已修复）
 
@@ -172,9 +177,9 @@ OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 
 |---|---|
 | `plate_gateway.py` | 主程序：MQTT 云端 + 串口 + 拍照识别集成 |
 | `plate_recognition.py` | 车牌定位与 OCR |
-| `plate_matcher.py` | 车牌库模糊匹配（加权编辑距离） |
+| `plate_matcher.py` | 车牌档案模糊匹配（加权编辑距离，数据源 vehicles.json） |
 | `plate_camera.py` | 手动拍照 -> 识别工具 |
-| `plate_db.json` | 车牌库：冀T234J5 / 鄂EM456U / 湘K4Z567 |
+| `vehicles.json` | 车辆档案：车牌 + 关联卡号 + 车主（车卡融合数据源，含示例 3 车） |
 | `cloud_config.json` | 华为云 MQTT 连接与串口配置 |
 | `huawei_iotda_product_model.json` | 云端产品模型（已导入） |
 | `test/` | 测试图：test.jpg->T234J5、test2.jpg->EM456U、test3.jpg->K4Z567 |
@@ -182,6 +187,8 @@ OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 
 
 `plate_gateway.py` 功能：
 - 串口线程 `watch_serial`：解析 STM32 上行消息并按协议映射为华为云属性上报
+- 车卡融合：`CAPTURE` 开启单次过闸会话（ARRIVAL），车牌命中 `vehicles.json` 且会话未开闸时自动发 `OPEN`；`CARD` 按档案记录 card_hit/card_unknown；`BARRIER:OPEN` 标记会话已开闸避免重复开闸
+- 事件记录：凭证命中/未命中写入 `events.jsonl`（barrier_open_by_plate / card_hit / plate_unknown 等，运行时文件不入库）
 - FIFO 线程 `watch_fifo`：监听 `/tmp/plate_cmd`，支持无 STM32 的本地调试触发
 - 拍照互斥：`CAPTURE_STATE` 锁保证同一时刻只有一次拍照+OCR，忙时挂起补拍一次；`rpicam-still` 失败重试 3 次
 - 云端命令：`open_barrier` / `close_barrier`（转发 OPEN/CLOSE 给 STM32，5s 超时等待 `BARRIER:` 应答后回执 success/failed）、`query_status`（按缓存直接应答）、`capture_photo`
@@ -213,10 +220,10 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 |---|---|---|
 | `SPOTS:<n>` | 剩余车位数 | Spot_state.remaining_spots |
 | `SPOT:<id>:<0/1>` | 车位 id(1起) 状态，1=占用 | Spot_state.Parking_id + Parking_state(occupied/empty) |
-| `CARD:<8位HEX>` | 刷卡卡号(4字节) | Spot_state.card_id |
+| `CARD:<8位HEX>` | 刷卡卡号(4字节) | Spot_state.card_id + vehicles.json 档案匹配记录（card_hit/card_unknown） |
 | `BARRIER:OPEN` | 道闸打开（含远程命令应答） | ParkingBarrier.barrier_state=up |
 | `BARRIER:CLOSE` | 道闸关闭（含远程命令应答） | ParkingBarrier.barrier_state=down |
-| `CAPTURE` | 车辆到达（红外触发），请求拍照识别 | 拍照->OCR->车牌库匹配->上报 PlateRecognition.plate_number |
+| `CAPTURE` | 车辆到达（红外触发），启动过闸会话并请求拍照识别 | 拍照->OCR->vehicles.json 匹配->命中自动 OPEN + 上报 PlateRecognition.plate_number |
 
 **树莓派 -> STM32（下行控制/结果）**
 
@@ -224,7 +231,7 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 |---|---|---|
 | `PLATE:<车牌>` | 识别结果（UTF-8 中文+ASCII） | OLED 第 4 行显示 Plate:<车牌> |
 | `PLATE:NONE` | 未识别到车牌 | OLED 第 4 行恢复占位 |
-| `OPEN` | 云端 open_barrier 命令 | 抬杆，回发 BARRIER:OPEN |
+| `OPEN` | 云端 open_barrier 命令或车牌档案命中 | 抬杆，回发 BARRIER:OPEN |
 | `CLOSE` | 云端 close_barrier 命令 | 落杆，回发 BARRIER:CLOSE |
 
 **云端命令**
@@ -235,7 +242,7 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 
 **触发方式**
 
-- STM32 红外（EXTI11）触发 -> 状态机发 CAPTURE 给树莓派 -> 拍照识别 -> 上报 + 回传 PLATE 显示
+- STM32 红外（EXTI11）触发 -> 状态机发 CAPTURE 给树莓派 -> 拍照识别 -> 命中档案自动 OPEN -> 上报 + 回传 PLATE 显示
 - 备用本地触发（无 STM32 调试）：`echo capture > /tmp/plate_cmd`
 
 ### 5.3 华为云 IoTDA 接入（树莓派）
@@ -318,7 +325,7 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 |------|------|
 | 无线传感 | ZigBee 车位采集（100ms 周期 + 随机抖动） |
 | 实时检测 | 超声波 <20cm 判占用，状态变化即上报 |
-| 身份验证 | RFID 白名单（Flash 持久化，CLI 增删查） |
+| 身份验证 | 车卡融合：车牌识别或 RFID 白名单任一命中开闸（单次过闸去重，离线刷卡兜底） |
 | 自动控制 | 状态机抬/落杆，红外联动，远程命令 |
 | 车牌识别 | 拍照 OCR + 车牌库模糊纠错 |
 | 云端集成 | 树莓派 MQTT 上报与命令下发（STM32 不直连） |
@@ -335,3 +342,4 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 6. **识别取景**：抓拍无真实车牌多为取景/时机问题，非算法故障；识别逻辑按用户要求暂不改
 7. **影子覆盖**：多车位 `Parking_id`/`Parking_state` 单值属性互相覆盖，需要时再改产品模型（每车位一属性或 json 全量快照）
 8. **遗留死代码**：`cc2530_parser.c`（二进制帧解析）无人调用，可清理或改造为走 pi_link
+9. **车辆档案**：`vehicles.json` 为车卡统一档案（plate + cards），STM32 Flash 白名单为离线刷卡兜底，新增车辆/卡片时两处需同步

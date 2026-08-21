@@ -43,6 +43,8 @@ CFG_PATH = os.path.join(BASE, "cloud_config.json")
 FIFO_PATH = "/tmp/plate_cmd"
 CAM_FILE = "/tmp/plate_cam.jpg"
 CAM_W, CAM_H = 2592, 1944
+VEHICLES_PATH = os.path.join(BASE, "vehicles.json")
+EVENTS_PATH = os.path.join(BASE, "events.jsonl")
 
 CMD_SUB_TOPIC = "$oc/devices/{}/sys/commands/#"
 CMD_RESP_TOPIC = "$oc/devices/{}/sys/commands/response/request_id={}"
@@ -52,11 +54,59 @@ PROP_REPORT_TOPIC = "$oc/devices/{}/sys/properties/report"
 STATE = {"remaining_spots": None, "barrier_state": None, "plate_number": None}
 PENDING_CMD = {"event": threading.Event(), "name": None, "success": False}
 CAPTURE_STATE = {"lock": threading.Lock(), "pending": False}
+# One-passage session: CAPTURE starts it; either credential (plate/card) opens once.
+ARRIVAL = {"lock": threading.Lock(), "active": False, "opened": False, "credential": None}
 
 
 def load_config():
     with open(CFG_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_vehicles():
+    """Load vehicle registry (vehicles.json)."""
+    if not os.path.exists(VEHICLES_PATH):
+        return []
+    with open(VEHICLES_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, list) else data.get("vehicles", [])
+
+
+def _ascii_upper(s):
+    return "".join(ch for ch in (s or "")
+                   if "A" <= ch <= "Z" or "a" <= ch <= "z" or "0" <= ch <= "9").upper()
+
+
+def find_vehicle_by_plate(plate):
+    ascii_plate = _ascii_upper(plate)
+    for v in load_vehicles():
+        if v.get("plate") == plate or _ascii_upper(v.get("plate", "")) == ascii_plate:
+            return v
+    return None
+
+
+def find_vehicle_by_card(card):
+    card = (card or "").upper()
+    for v in load_vehicles():
+        for c in v.get("cards", []):
+            if str(c).upper() == card:
+                return v
+    return None
+
+
+def append_event(event):
+    try:
+        with open(EVENTS_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("[GW] event log error: %s" % e, flush=True)
+
+
+def arrival_start():
+    with ARRIVAL["lock"]:
+        ARRIVAL["active"] = True
+        ARRIVAL["opened"] = False
+        ARRIVAL["credential"] = None
 
 
 def report_property(client, device_id, service_id, properties):
@@ -127,6 +177,26 @@ def _capture_and_report(ser, client, cfg):
         report_property(client, cfg["device_id"], "PlateRecognition",
                         {"plate_number": best})
         STATE["plate_number"] = best
+        veh = find_vehicle_by_plate(best)
+        do_open = False
+        with ARRIVAL["lock"]:
+            if ARRIVAL["active"] and not ARRIVAL["opened"] and veh is not None:
+                ARRIVAL["opened"] = True
+                ARRIVAL["credential"] = "plate"
+                do_open = True
+        if do_open:
+            send_serial(ser, "OPEN")
+            time.sleep(0.5)  # give STM32 time to consume OPEN before PLATE follows
+            append_event({"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                          "credential": "plate", "card": "",
+                          "plate": best, "owner": veh.get("owner", ""),
+                          "action": "barrier_open_by_plate"})
+            print("[GW] registered vehicle %s, auto OPEN" % best, flush=True)
+        elif veh is None:
+            append_event({"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                          "credential": "plate", "card": "",
+                          "plate": best, "owner": "",
+                          "action": "plate_unknown"})
         send_serial(ser, "PLATE:%s" % best)
         print("[GW] done: %s (%.1fs)" % (best, time.time() - t0), flush=True)
     except Exception as e:
@@ -182,11 +252,22 @@ def handle_stm32_line(ser, client, cfg, line):
         card = line[len("CARD:"):]
         report_property(client, cfg["device_id"], "Spot_state",
                         {"card_id": card})
+        veh = find_vehicle_by_card(card)
+        ev = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+              "credential": "card", "card": card,
+              "plate": veh.get("plate", "") if veh else "",
+              "owner": veh.get("owner", "") if veh else "",
+              "action": "card_hit" if veh else "card_unknown"}
+        append_event(ev)
     elif line == "BARRIER:OPEN":
         STATE["barrier_state"] = "up"
         report_property(client, cfg["device_id"], "ParkingBarrier",
                         {"barrier_state": "up"})
         complete_command("open_barrier")
+        with ARRIVAL["lock"]:
+            if ARRIVAL["active"] and not ARRIVAL["opened"]:
+                ARRIVAL["opened"] = True
+                ARRIVAL["credential"] = "card_or_remote"
     elif line == "BARRIER:CLOSE":
         STATE["barrier_state"] = "down"
         report_property(client, cfg["device_id"], "ParkingBarrier",
@@ -195,6 +276,7 @@ def handle_stm32_line(ser, client, cfg, line):
     elif line == "LINK:OK":
         print("[GW] STM32 link OK", flush=True)
     elif line == "CAPTURE":
+        arrival_start()
         threading.Thread(target=capture_and_report, args=(ser, client, cfg),
                          daemon=True).start()
     else:
@@ -315,6 +397,7 @@ def watch_fifo(client, cfg):
             continue
         if cmd == "capture":
             print("[GW] trigger received: capture", flush=True)
+            arrival_start()
             threading.Thread(target=capture_and_report,
                              args=(cfg.get("_serial"), client, cfg),
                              daemon=True).start()

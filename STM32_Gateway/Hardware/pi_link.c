@@ -72,7 +72,11 @@ void USART2_IRQHandler(void)
         uint8_t ch = (uint8_t)USART_ReceiveData(PI_UARTx);
         if (ch == '\n' || ch == '\r')
         {
-            if (pi_rx_len > 0)
+            /* Single-line buffer: never overwrite an unhandled line,
+               otherwise a fast follow-up line (e.g. PLATE right after
+               OPEN) can replace the pending command before the main
+               loop consumes it. Drop the new line instead. */
+            if (pi_rx_len > 0 && pi_rx_ready == 0)
             {
                 pi_rx_buf[pi_rx_len] = '\0';
                 pi_rx_ready = 1;
