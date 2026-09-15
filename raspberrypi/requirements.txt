@@ -1,0 +1,10 @@
+# 树莓派侧 Python 依赖
+#
+# 注意：OpenCV 在树莓派上建议用 apt 装（pip 在 Zero 上编译不动）：
+#     sudo apt install -y python3-opencv tesseract-ocr
+# 因此 install.sh 用 `python3 -m venv --system-site-packages` 建虚拟环境，
+# 让 venv 复用系统里的 cv2。
+#
+# 这里只列需要 pip 安装的包：
+paho-mqtt>=2.0
+pyserial>=3.5

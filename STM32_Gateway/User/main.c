@@ -7,11 +7,11 @@
 #include "MFRC522.h"
 #include "Infrared.h"
 #include "Servo.h"
-#include "esp8266.h"
 #include "project_config.h"
 #include "state_machine.h"
-#include "mqtt_report.h"
-#include "pi_link.h"
+#include "link.h"
+#include "watchdog.h"
+#include "fault_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -31,27 +31,17 @@ int main(void)
     while (1)
     {
         StateMachine_Process();
+        USART_Process();                    // 处理调试串口命令（环形缓冲取行）
         OLED_DisplayRemainingSpots();
-#if WIFI_ENABLE
-        ESP8266_ProcessWiFiConnection();
-        ESP8266_ProcessMQTTConnection();
-        ESP8266_ProcessData();
-#else
-        PI_UART_Process();
-#endif
+        Link_Process();                     // 处理树莓派下发命令（PLATE / OPEN / CLOSE）
+        Serial_Process();                   // 处理CC2530超声波数据（环形缓冲取行）
         ProcessUltrasonicData();
-#if WIFI_ENABLE
-        MQTT_ProcessHeartbeat();
-#endif
-        
-        // 处理延迟的车位状态MQTT上报
+
+        // 处理延迟的车位状态上报
         ProcessPendingSpotUpdate();
-        
-        // 处理ESP8266命令响应
-#if WIFI_ENABLE
-        ESP8266_ProcessPendingTasks();
-#endif
-        
+
+        // 喂狗：只要主循环还在转，就不会被 IWDG 复位
+        Watchdog_Feed();
         delay_ms(10);
     }
 }
@@ -60,6 +50,9 @@ void System_Init(void)
 {
     NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
     SysTick_Init();
+    /* 尽早打开看门狗：初始化阶段卡死同样能自愈。
+       注意 delay_ms 会在长延时期间喂狗，正常初始化不会被误复位。 */
+    Watchdog_Init();
     USART_Init_Config();
     Serial_Init();
     OLED_Init();
@@ -67,29 +60,20 @@ void System_Init(void)
     MFRC522_Init();
     Infrared_Init();
     Servo_Init();
-#if WIFI_ENABLE
-    ESP8266_Init();
-#endif
-    
+
+    /* 若上次是异常复位，这里会把现场打印出来（并清除记录） */
+    FaultLog_ReportOnBoot();
+
     OLED_ShowString(1, 1, "Smart Parking");
     OLED_ShowString(2, 1, "System v1.0");
     OLED_ShowString(3, 1, "Initializing...");
     delay_ms(2000);
-    
+
     StateMachine_Init();
-#if WIFI_ENABLE
-    MQTT_Init();
-#else
-    PI_UART_Init();
-#endif
-    
+    Link_Init();
+
     OLED_ShowString(3, 1, "System Ready   ");
-#if WIFI_ENABLE
-    /* cloud via ESP8266 */
-#else
-    PI_UART_SendString("LINK:OK\r\n");
     StateMachine_UpdateRemainingSpots(TOTAL_SPOTS);
-#endif
     OLED_DisplayPlateNumber(NULL);  // 预留第4行显示车牌号（占位，收到树莓派车牌后刷新）
     USART_Printf("System Init OK\r\n");
     USART_Printf("Total spots: %d\r\n", TOTAL_SPOTS);
@@ -165,12 +149,13 @@ void ProcessUltrasonicData(void)
         }
         
         sprintf(message, "OCCUPANCY:%d/%d|OCCUPIED:%s|FREE:%s", occupied_count, MAX_SPOT_ID, occupied_spots, free_spots);
-        USART_Printf("WiFi: Sending occupancy info: %s\r\n", message);
+        /* 车位变化汇总：只写调试串口；逐车位的状态已经通过 Link_ReportSpot 发给树莓派 */
+        USART_Printf("Occupancy: %s\r\n", message);
 
     }
 }
 
-// 处理延迟的车位状态MQTT上报
+// 处理延迟的车位状态上报
 extern uint8_t pending_spot_update;
 extern uint8_t pending_spot_id;
 extern uint8_t pending_spot_status;
@@ -180,15 +165,7 @@ void ProcessPendingSpotUpdate(void)
     if (pending_spot_update)
     {
         pending_spot_update = 0;
-#if WIFI_ENABLE
-        MQTT_ReportSpotStatus(pending_spot_id, pending_spot_status);
-#else
-        {
-            char pi_buf[32];
-            sprintf(pi_buf, "SPOT:%d:%d\r\n", pending_spot_id, pending_spot_status);
-            PI_UART_SendString(pi_buf);
-        }
-#endif
+        Link_ReportSpot(pending_spot_id, pending_spot_status);
         /* sync remaining spot count to Pi after each change */
         {
             uint8_t occupied_count = 0;

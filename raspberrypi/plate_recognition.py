@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 车牌识别 - 树莓派 Zero WH 优化版
@@ -9,6 +9,7 @@
 用法: python3 plate_recognition.py [--debug] <图片1> [图片2 ...]
 """
 import os, re, sys, time
+import plate_format
 import plate_matcher
 import cv2, numpy as np, pytesseract
 
@@ -16,11 +17,12 @@ WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 PSM_ORDER = (8, 13, 7)          # psm8/13 最稳, psm7 兜底
 ASPECT_TARGET = 3.15            # 标准车牌宽高比
 ASPECT_RANGE = (2.0, 4.0)       # 允许范围
-MIN_AREA = 5000
+# 候选面积/宽度按图像尺寸取比例，避免换分辨率后阈值失效：
+#   2592x1944 下 MIN_AREA_RATIO 对应原来的 5000 像素
+#   2592 宽下 MIN_WIDTH_RATIO 对应原来的 60 像素
+MIN_AREA_RATIO = 0.00099
+MIN_WIDTH_RATIO = 0.023
 OCR_MAXW = 600
-
-# 位置0(城市字母)误读修正: 该位置必为字母; T 最常被读成 7/1/8
-POS0_FIX = {"1": "T", "7": "T", "8": "T"}
 
 
 def clean_text(t):
@@ -33,10 +35,13 @@ def find_plate_candidates(img):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 7), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    img_h, img_w = img.shape[:2]
+    min_area = MIN_AREA_RATIO * img_w * img_h
+    min_w = MIN_WIDTH_RATIO * img_w
     cands = []
     for c in contours:
         area = cv2.contourArea(c)
-        if area < MIN_AREA:
+        if area < min_area:
             continue
         (_, _), (rw, rh), _ = cv2.minAreaRect(c)
         if rw < rh:
@@ -46,7 +51,7 @@ def find_plate_candidates(img):
         aspect = rw / rh
         if not (ASPECT_RANGE[0] <= aspect <= ASPECT_RANGE[1]):
             continue
-        if rw < 60 or rh < 20:
+        if rw < min_w or rh < min_w / 3.0:
             continue
         cands.append((abs(aspect - ASPECT_TARGET), -area, c))
     cands.sort(key=lambda t: (t[0], t[1]))
@@ -104,39 +109,15 @@ def ocr_plate_crop(img, contour):
     return ocr_line(preprocess(img[y0:y1, x0:x1]))
 
 
-def _score_win(w):
-    """车牌特征打分: 首位字母(城市位)最关键, 尾部字母/第二位字母/Z误读模式加分."""
-    sc = 0
-    if w[0].isalpha():
-        sc += 3
-    else:
-        sc -= 2
-    if len(w) > 1 and w[1].isalpha():
-        sc += 1
-    if w[-1].isalpha():
-        sc += 1
-    if (len(w) == 6 and w[2] == "7" and w[1].isdigit()
-            and w[3].isdigit() and w[4].isdigit() and w[5].isdigit()):
-        sc += 2
-    return sc
-
-
 def post_process(text):
-    s = text
-    if len(s) <= 6:
-        win = s
-    else:
-        wins = [s[i:i + 6] for i in range(len(s) - 5)]
-        # 分数相同优先取"去掉一个串首噪声"的窗口(省份汉字在串首)
-        win = max(wins, key=lambda w: (_score_win(w) + (2 if w == s[1:7] else 0), 0))
-    if len(win) != 6:
-        return win
-    if win[0].isdigit():
-        win = POS0_FIX.get(win[0], win[0]) + win[1:]
-    if (win[2] == "7" and win[1].isdigit()
-            and win[3].isdigit() and win[4].isdigit() and win[5].isdigit()):
-        win = win[:2] + "Z" + win[3:]
-    return win
+    """OCR 文本 -> 规范化的车牌串（6 位燃油 / 7 位新能源）。
+
+    规则集中在 plate_format（中国车牌结构语义），不再硬编码
+    "首位 1/7/8 改成 T"、"序号 7 改成 Z" 这类只对某一块测试车牌成立的
+    替换——那会把合法车牌改坏。首位到底属于哪个字母属于"消歧"，
+    交由车辆库匹配（plate_matcher）结合库内车牌决定。
+    """
+    return plate_format.post_process(text)
 
 
 def main():
@@ -176,4 +157,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

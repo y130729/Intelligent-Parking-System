@@ -1,0 +1,45 @@
+[Unit]
+Description=Smart Parking Gateway (Huawei Cloud MQTT + STM32 UART + plate recognition)
+Documentation=file:///opt/parking/Readme.md
+After=network-online.target dev-serial0.device
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/parking/raspberrypi
+# 关掉 Python 的块缓冲：stdout 被重定向到 journald 时默认是块缓冲的，
+# 不写这一行 `journalctl -u plate-gateway` 会长时间什么都看不到。
+Environment=PYTHONUNBUFFERED=1
+# 虚拟环境解释器：把 venv 里的依赖和系统解释器隔离开
+ExecStart=/opt/parking/.venv/bin/python3 -u /opt/parking/raspberrypi/plate_gateway.py
+# 日志走 journald，不再写 /tmp（tmpfs 重启即丢）
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=parking-gateway
+
+# 崩溃自动重启：从"实验室脚本"变成"现场设备"的关键一步
+Restart=always
+RestartSec=2
+# 短时间内反复崩溃说明有确定性问题，不要再无限重启拖垮系统
+StartLimitBurst=5
+
+# 资源限制：Pi Zero 只有 512MB 内存，OCR 容易吃满
+MemoryMax=256M
+MemoryHigh=192M
+CPUWeight=80
+
+# 只有这些路径需要写权限（vehicles.json 同目录会写 events.jsonl）
+ReadWritePaths=/opt/parking/raspberrypi /tmp
+
+# 基本加固
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

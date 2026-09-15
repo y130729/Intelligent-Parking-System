@@ -18,7 +18,7 @@
           <Vendor>STMicroelectronics</Vendor>
           <PackID>Keil.STM32F1xx_DFP.2.2.0</PackID>
           <PackURL>http://www.keil.com/pack/</PackURL>
-          <Cpu>IRAM(0x20000000,0x5000) IROM(0x08000000,0x10000) CPUTYPE("Cortex-M3") CLOCK(12000000) ELITTLE</Cpu>
+          <Cpu>IRAM(0x20000000,0x5000) IROM(0x08000000,0x7000) CPUTYPE("Cortex-M3") CLOCK(12000000) ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
           <StartupFile></StartupFile>
           <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F10x_128 -FS08000000 -FL020000 -FP0($$Device:STM32F103C8$Flash\STM32F10x_128.FLM))</FlashDriverDll>
@@ -252,7 +252,7 @@
               <IROM>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x10000</Size>
+                <Size>0x7000</Size>
               </IROM>
               <XRAM>
                 <Type>0</Type>
@@ -277,7 +277,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x10000</Size>
+                <Size>0x7000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -665,16 +665,6 @@
               <FilePath>.\User\stm32f10x_it.c</FilePath>
             </File>
             <File>
-              <FileName>cc2530_parser.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\User\cc2530_parser.c</FilePath>
-            </File>
-            <File>
-              <FileName>mqtt_report.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\User\mqtt_report.c</FilePath>
-            </File>
-            <File>
               <FileName>state_machine.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\User\state_machine.c</FilePath>
@@ -684,20 +674,25 @@
               <FileType>5</FileType>
               <FilePath>.\User\project_config.h</FilePath>
             </File>
+            <File>
+              <FileName>link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\User\link.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
           <GroupName>Hardware</GroupName>
           <Files>
             <File>
-              <FileName>esp8266.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\Hardware\esp8266.c</FilePath>
-            </File>
-            <File>
               <FileName>pi_link.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\pi_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>ring_buffer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Hardware\ring_buffer.c</FilePath>
             </File>
             <File>
               <FileName>Infrared.c</FileName>
@@ -734,6 +729,11 @@
               <FileType>1</FileType>
               <FilePath>.\Hardware\flash_storage.c</FilePath>
             </File>
+            <File>
+              <FileName>watchdog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Hardware\watchdog.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -743,6 +743,11 @@
               <FileName>system_tick.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\System\system_tick.c</FilePath>
+            </File>
+            <File>
+              <FileName>fault_log.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\System\fault_log.c</FilePath>
             </File>
           </Files>
         </Group>

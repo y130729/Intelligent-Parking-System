@@ -9,6 +9,19 @@
   "ca_cert": "/etc/ssl/certs/ca-certificates.crt",
   "serial_port": "/dev/serial0",
   "serial_baud": 115200,
+  "passage_ttl_s": 60,
+  "publish_queue_size": 256,
+  "camera": {
+    "width": 2592,
+    "height": 1944,
+    "timeout_ms": 200,
+    "immediate": false,
+    "metering": "centre",
+    "extra_args": [],
+    "attempts": 2,
+    "command_timeout_s": 15,
+    "retry_delay_s": 1
+  },
   "test_report": {
     "service_id": "Spot_state",
     "properties": {

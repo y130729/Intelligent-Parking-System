@@ -3,10 +3,18 @@
 #include <stdarg.h>
 #include <string.h>
 #include "USART.h"
-#include "mqtt_report.h"
+#include "ring_buffer.h"
 
 #define PARKING_THRESHOLD_CM 20
 #define MAX_SPOTS 20
+
+/* 环形缓冲容量（2 的幂）：缓存 CC2530 发送的整行数据，
+   避免主循环繁忙时单行缓冲被覆盖。 */
+#define SERIAL_RX_RING_SIZE  64
+#define SERIAL_RX_LINE_SIZE  32
+
+static uint8_t serial_rx_ring_buf[SERIAL_RX_RING_SIZE];
+static RingBuffer serial_rx_ring;
 
 extern uint8_t spot_occupied[MAX_SPOTS];
 extern uint8_t ultrasonic_new_data_flag;
@@ -62,6 +70,7 @@ void Serial_Init(void)
 	
 	/*USART使能*/
 	USART_Cmd(USART3, ENABLE);								//使能USART3，串口开始运行
+	RingBuf_Init(&serial_rx_ring, serial_rx_ring_buf, SERIAL_RX_RING_SIZE);
 	
 	USART_Printf("CC2530 UART initialized (USART3)\r\n");
 }
@@ -152,85 +161,110 @@ void Serial_Printf(char *format, ...)
 	Serial_SendString(String);		//串口发送字符数组（字符串）
 }
 
-static uint8_t rx_buffer[32];
-static uint8_t rx_index = 0;
-
 /**
-  * 函    数：USART3中断函数 - 处理CC2530发送的超声波数据
+  * 函    数：USART3中断函数 - 只接收字节写入环形缓冲
   * 参    数：无
   * 返 回 值：无
   * 注意事项：此函数为中断函数，无需调用，中断触发后自动执行
-  *           解析格式："PX:XXXcm" 其中P为标识位，X为车位号(1-20)，XXX为距离数值(0-999cm)
-  *           例如 "P1:15cm" 表示车位1距离15cm，距离小于20cm判定为有车
+  *           行解析由主循环 Serial_Process() 完成
   */
 void USART3_IRQHandler(void)
 {
 	if (USART_GetITStatus(USART3, USART_IT_RXNE) == SET)	//判断是否是USART3的接收事件触发的中断
 	{
 		uint8_t RxData = USART_ReceiveData(USART3);			//读取CC2530发送的数据
-		
-		if (RxData == '\n' || RxData == '\r')
+		RingBuf_Write(&serial_rx_ring, RxData);
+		USART_ClearITPendingBit(USART3, USART_IT_RXNE);		//清除标志位
+	}
+}
+
+/**
+  * 函    数：解析一行CC2530超声波数据
+  * 参    数：line 一行数据，格式 "PX:XXXcm"
+  * 返 回 值：无
+  */
+static void Serial_HandleLine(uint8_t *line)
+{
+	uint8_t spot_id = 0;
+	uint16_t distance = 0;
+
+	// 解析带车位号的格式: "PX:XXXcm"
+	if (line[0] == 'P' && line[3] == ':')
+	{
+		// 解析车位号 (1-2位)
+		if (line[1] >= '0' && line[1] <= '9')
 		{
-			if (rx_index > 0)
+			spot_id = (line[1] - '0') * 10;
+			if (line[2] >= '0' && line[2] <= '9')
 			{
-				rx_buffer[rx_index] = '\0';
-				
-				uint8_t spot_id = 0;
-				uint16_t distance = 0;
-				
-				// 解析带车位号的格式: "PX:XXXcm"
-				if (rx_buffer[0] == 'P' && rx_buffer[3] == ':')
-				{
-					// 解析车位号 (1-2位)
-					if (rx_buffer[1] >= '0' && rx_buffer[1] <= '9')
-					{
-						spot_id = (rx_buffer[1] - '0') * 10;
-						if (rx_buffer[2] >= '0' && rx_buffer[2] <= '9')
-						{
-							spot_id += (rx_buffer[2] - '0');
-						}
-						else if (rx_buffer[2] == ':')
-						{
-							spot_id = (rx_buffer[1] - '0');
-						}
-					}
-					
-					if (spot_id > 0 && spot_id <= MAX_SPOTS)
-					{
-						// 解析距离 (格式: XXXcm)
-						if (sscanf((char*)&rx_buffer[4], "%hucm", &distance) == 1)
-						{
-							uint8_t spot_index = spot_id - 1;
-							uint8_t prev_state = spot_occupied[spot_index];
-							spot_occupied[spot_index] = (distance < PARKING_THRESHOLD_CM) ? 1 : 0;
-							
-							if (spot_occupied[spot_index] != prev_state)
-							{
-								ultrasonic_new_data_flag = 1;
-								if (spot_occupied[spot_index])
-								{
-									USART_Printf("Spot %d occupied (distance: %dcm)\r\n", spot_id, distance);
-								}
-								else
-								{
-									USART_Printf("Spot %d free (distance: %dcm)\r\n", spot_id, distance);
-								}
-								// 不要在中断中调用MQTT发布，设置标志位让主循环处理
-								pending_spot_id = spot_id;
-								pending_spot_status = spot_occupied[spot_index];
-								pending_spot_update = 1;
-							}
-						}
-					}
-				}
-				rx_index = 0;
+				spot_id += (line[2] - '0');
+			}
+			else if (line[2] == ':')
+			{
+				spot_id = (line[1] - '0');
 			}
 		}
-		else if (rx_index < sizeof(rx_buffer) - 1)
+
+		if (spot_id > 0 && spot_id <= MAX_SPOTS)
 		{
-			rx_buffer[rx_index++] = RxData;
+			// 解析距离 (格式: XXXcm)
+			if (sscanf((char*)&line[4], "%hucm", &distance) == 1)
+			{
+				uint8_t spot_index = spot_id - 1;
+				uint8_t prev_state = spot_occupied[spot_index];
+				spot_occupied[spot_index] = (distance < PARKING_THRESHOLD_CM) ? 1 : 0;
+
+				if (spot_occupied[spot_index] != prev_state)
+				{
+					ultrasonic_new_data_flag = 1;
+					if (spot_occupied[spot_index])
+					{
+						USART_Printf("Spot %d occupied (distance: %dcm)\r\n", spot_id, distance);
+					}
+					else
+					{
+						USART_Printf("Spot %d free (distance: %dcm)\r\n", spot_id, distance);
+					}
+					// 设置标志位，由主循环 ProcessPendingSpotUpdate() 上报
+					pending_spot_id = spot_id;
+					pending_spot_status = spot_occupied[spot_index];
+					pending_spot_update = 1;
+				}
+			}
 		}
-		
-		USART_ClearITPendingBit(USART3, USART_IT_RXNE);		//清除标志位
+	}
+}
+
+/**
+  * 函    数：主循环调用，从环形缓冲取字节并按行处理CC2530数据
+  * 参    数：无
+  * 返 回 值：无
+  */
+void Serial_Process(void)
+{
+	static uint8_t line[SERIAL_RX_LINE_SIZE];
+	static uint8_t line_len = 0;
+	uint8_t ch;
+
+	while (RingBuf_Read(&serial_rx_ring, &ch))
+	{
+		if (ch == '\n' || ch == '\r')
+		{
+			if (line_len > 0)
+			{
+				line[line_len] = '\0';
+				Serial_HandleLine(line);
+				line_len = 0;
+			}
+		}
+		else if (line_len < SERIAL_RX_LINE_SIZE - 1)
+		{
+			line[line_len++] = ch;
+		}
+		else
+		{
+			/* 单行超长：丢弃该行，等待行结束重新同步 */
+			line_len = 0;
+		}
 	}
 }

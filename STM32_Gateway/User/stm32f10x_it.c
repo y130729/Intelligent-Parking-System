@@ -24,6 +24,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f10x_it.h"
 #include "system_tick.h"
+#include "fault_log.h"
 
 /** @addtogroup STM32F10x_StdPeriph_Template
   * @{
@@ -56,10 +57,10 @@ void NMI_Handler(void)
   */
 void HardFault_Handler(void)
 {
-  /* Go to infinite loop when Hard Fault exception occurs */
-  while (1)
-  {
-  }
+  /* 记录现场到 Flash 保留页并复位。
+     原来是 while(1) 死循环：现场表现就是"设备没反应，只能断电重启"，
+     而且什么线索都留不下。 */
+  FaultLog_Save(FAULT_KIND_HARD);
 }
 
 /**
@@ -69,10 +70,7 @@ void HardFault_Handler(void)
   */
 void MemManage_Handler(void)
 {
-  /* Go to infinite loop when Memory Manage exception occurs */
-  while (1)
-  {
-  }
+  FaultLog_Save(FAULT_KIND_MEMMANAGE);
 }
 
 /**
@@ -82,10 +80,7 @@ void MemManage_Handler(void)
   */
 void BusFault_Handler(void)
 {
-  /* Go to infinite loop when Bus Fault exception occurs */
-  while (1)
-  {
-  }
+  FaultLog_Save(FAULT_KIND_BUS);
 }
 
 /**
@@ -95,10 +90,7 @@ void BusFault_Handler(void)
   */
 void UsageFault_Handler(void)
 {
-  /* Go to infinite loop when Usage Fault exception occurs */
-  while (1)
-  {
-  }
+  FaultLog_Save(FAULT_KIND_USAGE);
 }
 
 /**

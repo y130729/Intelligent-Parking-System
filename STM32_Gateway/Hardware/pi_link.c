@@ -1,14 +1,17 @@
 #include "pi_link.h"
+#include "ring_buffer.h"
 #include "USART.h"
 #include "OLED.h"
 #include "state_machine.h"
 #include <string.h>
 #include <stdio.h>
 
-static uint8_t  pi_rx_buf[PI_RX_BUF_SIZE];
-static uint8_t  pi_rx_len = 0;
-static volatile uint8_t pi_rx_ready = 0;
-static char     pi_rx_line[PI_RX_BUF_SIZE];
+/* 环形缓冲容量（2 的幂）。单行最长 PI_RX_BUF_SIZE，这里可排队多条命令，
+   避免主循环繁忙时"缓冲覆盖丢指令"。 */
+#define PI_RX_RING_SIZE   128
+
+static uint8_t  pi_rx_ring_buf[PI_RX_RING_SIZE];
+static RingBuffer pi_rx_ring;
 
 void PI_UART_Init(void)
 {
@@ -46,6 +49,8 @@ void PI_UART_Init(void)
     NVIC_Init(&NVIC_InitStructure);
 
     USART_Cmd(PI_UARTx, ENABLE);
+
+    RingBuf_Init(&pi_rx_ring, pi_rx_ring_buf, PI_RX_RING_SIZE);
 }
 
 void PI_UART_SendByte(uint8_t byte)
@@ -64,53 +69,32 @@ void PI_UART_SendString(const char *str)
     }
 }
 
-/* USART2 RX interrupt: collect one line (terminated by LF/CR). */
+/* USART2 RX interrupt: 只把收到的字节写入环形缓冲，
+   行提取与处理由主循环 PI_UART_Process() 完成。 */
 void USART2_IRQHandler(void)
 {
     if (USART_GetITStatus(PI_UARTx, USART_IT_RXNE) != RESET)
     {
         uint8_t ch = (uint8_t)USART_ReceiveData(PI_UARTx);
-        if (ch == '\n' || ch == '\r')
-        {
-            /* Single-line buffer: never overwrite an unhandled line,
-               otherwise a fast follow-up line (e.g. PLATE right after
-               OPEN) can replace the pending command before the main
-               loop consumes it. Drop the new line instead. */
-            if (pi_rx_len > 0 && pi_rx_ready == 0)
-            {
-                pi_rx_buf[pi_rx_len] = '\0';
-                pi_rx_ready = 1;
-            }
-            pi_rx_len = 0;
-        }
-        else if (pi_rx_len < PI_RX_BUF_SIZE - 1)
-        {
-            pi_rx_buf[pi_rx_len++] = ch;
-        }
-        else
-        {
-            pi_rx_len = 0;
-        }
+        RingBuf_Write(&pi_rx_ring, ch);
     }
 }
 
-/* Called from main loop: handle a complete line from Raspberry Pi. */
-void PI_UART_Process(void)
+/* 处理一行来自树莓派的命令。 */
+static void PI_UART_HandleLine(char *line)
 {
-    if (!pi_rx_ready) return;
-    pi_rx_ready = 0;
-
-    strncpy(pi_rx_line, (char *)pi_rx_buf, PI_RX_BUF_SIZE - 1);
-    pi_rx_line[PI_RX_BUF_SIZE - 1] = '\0';
-    USART_Printf("PI_RX: %s\r\n", pi_rx_line);
+    USART_Printf("PI_RX: %s\r\n", line);
 
     /* Commands from Raspberry Pi:
        "PLATE:<plate>"  -> display recognized plate on OLED line 4
        "PLATE:NONE"     -> clear plate display
-       "OPEN"/"CLOSE"   -> remote barrier control */
-    if (strncmp(pi_rx_line, "PLATE:", 6) == 0)
+       "OPEN[:<reason>]"/"CLOSE[:<reason>]" -> barrier control
+         reason = card | plate | remote，用来告诉 STM32 这次是谁开的闸；
+         STM32 会把它原样回给树莓派，写入通行记录（审计需要）。
+         不带 reason 的写法仍然兼容（按 remote 处理）。 */
+    if (strncmp(line, "PLATE:", 6) == 0)
     {
-        char *plate = &pi_rx_line[6];
+        char *plate = &line[6];
         if (strcmp(plate, "NONE") == 0)
         {
             OLED_DisplayPlateNumber("------");
@@ -120,14 +104,48 @@ void PI_UART_Process(void)
             OLED_DisplayPlateNumber(plate);
         }
     }
-    else if (strcmp(pi_rx_line, "OPEN") == 0)
+    else if (strncmp(line, "OPEN", 4) == 0 && (line[4] == '\0' || line[4] == ':'))
     {
-        USART_Printf("Remote command: open barrier\r\n");
-        StateMachine_RemoteOpen();
+        const char *reason = (line[4] == ':') ? &line[5] : "";
+        USART_Printf("Remote command: open barrier (%s)\r\n",
+                     (reason[0] != '\0') ? reason : "remote");
+        StateMachine_RemoteOpen(reason);
     }
-    else if (strcmp(pi_rx_line, "CLOSE") == 0)
+    else if (strncmp(line, "CLOSE", 5) == 0 && (line[5] == '\0' || line[5] == ':'))
     {
-        USART_Printf("Remote command: close barrier\r\n");
+        const char *reason = (line[5] == ':') ? &line[6] : "";
+        USART_Printf("Remote command: close barrier (%s)\r\n",
+                     (reason[0] != '\0') ? reason : "remote");
         StateMachine_RemoteClose();
+    }
+}
+
+/* Called from main loop: pull bytes from ring buffer, cut lines on CR/LF. */
+void PI_UART_Process(void)
+{
+    static char line[PI_RX_BUF_SIZE];
+    static uint16_t line_len = 0;
+    uint8_t ch;
+
+    while (RingBuf_Read(&pi_rx_ring, &ch))
+    {
+        if (ch == '\n' || ch == '\r')
+        {
+            if (line_len > 0)
+            {
+                line[line_len] = '\0';
+                PI_UART_HandleLine(line);
+                line_len = 0;
+            }
+        }
+        else if (line_len < PI_RX_BUF_SIZE - 1)
+        {
+            line[line_len++] = (char)ch;
+        }
+        else
+        {
+            /* 单行超长：丢弃该行，等待行结束重新同步 */
+            line_len = 0;
+        }
     }
 }

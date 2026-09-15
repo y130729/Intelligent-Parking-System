@@ -21,5 +21,6 @@ void USART_Init_Config(void);
 void USART_SendByte(uint8_t byte);
 void USART_SendString(char *str);
 void USART_Printf(const char *format, ...);
+void USART_Process(void);
 
 #endif /* __USART_H */

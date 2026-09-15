@@ -19,6 +19,7 @@ void StateMachine_Process(void);
 void StateMachine_SetVehicleArrive(void);
 void StateMachine_UpdateRemainingSpots(uint8_t count);
 
-void StateMachine_RemoteOpen(void);
+/* reason: 开闸凭证来源（LINK_REASON_CARD / PLATE / REMOTE），可为 NULL */
+void StateMachine_RemoteOpen(const char *reason);
 void StateMachine_RemoteClose(void);
 #endif /* __STATE_MACHINE_H */

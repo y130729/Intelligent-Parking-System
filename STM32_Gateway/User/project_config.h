@@ -3,8 +3,11 @@
 
 /* System Configuration */
 #define SYS_CLOCK_FREQ        72000000UL
-/* Network switch: 0 = offline mode (cloud handled by Raspberry Pi), 1 = ESP8266 WiFi on STM32 */
-#define WIFI_ENABLE           0
+
+/* 云端连接方式：统一由树莓派（MQTTS + TLS）承担。
+   STM32 侧的 ESP8266/MQTT 实现已删除 —— 保留两套传输会让业务代码里到处
+   出现 #if WIFI_ENABLE 分支，而且明文 MQTT 也不适合现场使用。
+   STM32 与树莓派之间只走 USART2 上的文本行协议（见 User/link.c）。 */
 
 /* Parking Lot Configuration */
 #define TOTAL_SPOTS           20
@@ -12,39 +15,28 @@
 
 /* RFID Configuration */
 #define MAX_CARD_ID_LENGTH    4
-#define VALID_CARD_COUNT      10
+/* 白名单容量/存储地址在 Hardware/flash_storage.h：
+   MAX_WHITELIST_CARDS / FLASH_SECTOR_ADDR / CARD_ID_LENGTH */
 
 /* Timeout Configuration */
-#define RFID_TIMEOUT_MS       5000
 #define BARRIER_UP_DELAY_MS   3000
 #define BARRIER_DOWN_DELAY_MS 1000
-#define HEARTBEAT_INTERVAL_S  30
 #define ERROR_DISPLAY_DELAY_MS 3000
 
-/* Huawei Cloud MQTT Configuration */
-#define HUAWEI_MQTT_BROKER    "21210fb4d9.st1.iotda-device.cn-south-1.myhuaweicloud.com"
-#define HUAWEI_MQTT_PORT      "1883"
-#define HUAWEI_MQTT_DEVICE_ID "6a02cb70c00ccb6d4b5364bb_HW_MQTT"
-#define HUAWEI_MQTT_CLIENT_ID "6a02cb70c00ccb6d4b5364bb_HW_MQTT_0_1_2026061608"
-#define HUAWEI_MQTT_USERNAME  "6a02cb70c00ccb6d4b5364bb_HW_MQTT"
-#define HUAWEI_MQTT_PASSWORD  "29eaba1a0fa4eaf3c1de8eb89c677febbc73a1081aab6dc83189b02d38a9025e"
+/* 华为云设备凭据已从固件中移除：云端连接由树莓派负责，
+   凭据只保留在树莓派侧的本地配置文件里（不进版本库）。 */
 
-/* Topic Definitions */
-#define MQTT_TOPIC_EVENT      "$oc/devices/%s/sys/events/up"
-#define MQTT_TOPIC_PROPERTY   "$oc/devices/%s/sys/properties/report"
-#define MQTT_TOPIC_COMMAND    "$oc/devices/%s/sys/commands/down"
-
-/* CC2530 Communication Protocol */
-#define CC2530_FRAME_HEADER   0xAA
-#define CC2530_FRAME_TAIL     0xBB
-#define CC2530_FRAME_MIN_LEN 5
+/* Flash 分区（64KB，1KB/页）—— 改分区表请同步 Readme 与 fault_log.h
+   0x08000000 - 0x08006FFF  应用程序（代码不得越过 0x08007000）
+   0x08007000 - 0x080073FF  刷卡白名单（Hardware/flash_storage.c）
+   0x0800FC00 - 0x0800FFFF  故障记录（System/fault_log.c，最后一页） */
+#define FLASH_APP_LIMIT_ADDR  0x08007000u
 
 /* Ultrasonic Configuration */
 #define PARKING_THRESHOLD_CM 20
-
-#endif /* __PROJECT_CONFIG_H */
 
 /* Global Variables Declaration */
 extern uint8_t spot_occupied[MAX_SPOT_ID];
 extern uint8_t ultrasonic_new_data_flag;
 
+#endif /* __PROJECT_CONFIG_H */

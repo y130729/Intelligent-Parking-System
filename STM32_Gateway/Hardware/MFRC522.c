@@ -5,6 +5,11 @@
 #define 	MAXRLEN 18
 #define   RC522_DELAY()  delay_us(2)
 
+/* 软复位等待次数上限。一次 Read_MFRC522 是软件 SPI 读一个寄存器
+   （约 2us x 8 x 2 量级），1000 次保守估计在数十毫秒量级，
+   正常芯片几个计数内就会清掉 CommandReg 的软复位位。 */
+#define   RC522_RESET_TIMEOUT   1000u
+
 
 void MFRC522_Init(void)
 {
@@ -171,7 +176,20 @@ char MFRC522_Reset(void)
 
     //MFRC522_RST_H;
     Write_MFRC522(CommandReg,0x0F); //soft reset
-    while(Read_MFRC522(CommandReg) & 0x10); //wait chip start ok
+    // 等待软复位完成：原来是无条件死等，RC522 虚焊/掉线就会永久卡在这里，
+    // 整个网关随之失去响应（只能靠看门狗复位）。加超时后返回错误，
+    // 由上层重试。
+    {
+        uint16_t timeout = RC522_RESET_TIMEOUT;
+        while ((Read_MFRC522(CommandReg) & 0x10) && (timeout != 0))
+        {
+            timeout--;
+        }
+        if (timeout == 0)
+        {
+            return MI_ERR;
+        }
+    }
 
 		delay_us (1);            
 
