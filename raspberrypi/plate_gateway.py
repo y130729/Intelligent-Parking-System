@@ -78,9 +78,35 @@ PUB_QUEUE_SIZE = 256
 PUB_Q = queue.Queue(maxsize=PUB_QUEUE_SIZE)
 
 
+SECRET_PATH = os.path.join(BASE, "cloud_secret.json")
+
+
+def _read_secret():
+    """取设备密钥，优先级：环境变量 > cloud_secret.json。
+
+    为什么要外置：把密码写在 cloud_config.json 里，这个文件一旦进了
+    git（本仓库历史上就进过）就等于把设备凭据公开了。现在配置文件里
+    只剩"连哪里"，"凭什么连"放在仓库之外。
+    """
+    env = os.environ.get("PARKING_MQTT_PASSWORD")
+    if env:
+        return env
+    if os.path.exists(SECRET_PATH):
+        st = os.stat(SECRET_PATH)
+        if st.st_mode & 0o077:
+            print("[GW] WARN: %s 权限过宽（应为 0600）" % SECRET_PATH, flush=True)
+        with open(SECRET_PATH, encoding="utf-8") as f:
+            return json.load(f)["password"]
+    raise RuntimeError(
+        "缺少 MQTT 密码：请设置环境变量 PARKING_MQTT_PASSWORD，"
+        "或创建 %s（chmod 600），内容形如 {\"password\": \"...\"}" % SECRET_PATH)
+
+
 def load_config():
     with open(CFG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    cfg["password"] = _read_secret()
+    return cfg
 
 
 def load_vehicles():
@@ -165,14 +191,38 @@ def publish_worker(client, cfg):
             PUB_Q.task_done()
 
 
+# 串口写是共享资源：dispatcher 线程发 OPEN/CLOSE，拍照线程发 PLATE，
+# FIFO 线程也可能发。pyserial 的 write 不是原子的，两帧交错就会得到
+# 半帧 + 半帧——对方按行解析时两帧全废。所有写都必须拿这把锁。
+SERIAL_LOCK = threading.Lock()
+TX_SEQ = {"next": 0}
+TX_STATS = {"frames": 0, "errors": 0}
+
+
 def send_serial(ser, line):
+    """发送一条 payload（自动加帧头/CRC/序号），线程安全。"""
     if ser is None:
         print("[GW] UART not available, drop: %s" % line, flush=True)
-        return
-    try:
-        ser.write((line + "\r\n").encode("utf-8"))
-    except Exception as e:
-        print("[GW] UART write error: %s" % e, flush=True)
+        return False
+    # 序号必须在锁内取。原来"锁外读 SEQ -> 写 -> 锁外 +1"是有竞态的：
+    # 两个线程可能拿到同一个序号，而对端按 SEQ 判重，第二条会被当成
+    # "重传"直接丢掉——丢的正好可能是一条 OPEN/CLOSE。
+    with SERIAL_LOCK:
+        seq = TX_SEQ["next"]
+        frame = sp.encode_frame(seq, line)
+        if frame is None:
+            print("[GW] UART frame too long, drop: %s" % line, flush=True)
+            return False
+        try:
+            ser.write((frame + "\r\n").encode("latin-1"))
+            ser.flush()
+        except Exception as e:
+            TX_STATS["errors"] += 1
+            print("[GW] UART write error: %s" % e, flush=True)
+            return False
+        TX_SEQ["next"] = (seq + 1) & 0xFF
+        TX_STATS["frames"] += 1
+        return True
 
 
 def capture_photo(out_path, cfg=None):
@@ -316,7 +366,42 @@ def _note_barrier_open(client, cfg, reason, now):
               % credential, flush=True)
 
 
+# 收帧统计与重复帧检测（对端重传时同一条不会被执行两次）
+RX_STATS = {"frames": 0, "legacy": 0, "bad": 0, "duplicates": 0}
+LAST_SEQ = {"seen": False, "value": None}
+
+
+def _ack(ser, seq):
+    send_serial(ser, "ACK:%02X" % seq)
+
+
 def handle_stm32_line(ser, client, cfg, line):
+    status, seq, payload = sp.decode_frame(line)
+    if status == sp.FRAME_INVALID:
+        RX_STATS["bad"] += 1
+        print("[GW] UART bad frame dropped: %r" % line.strip(), flush=True)
+        return
+    if status == sp.FRAME_OK:
+        if payload.startswith("ACK:"):
+            return                      # ACK 不再回 ACK，避免两端互相确认到死
+        if payload.startswith("LINK:OK") and LAST_SEQ["seen"]:
+            # STM32 重启后序号从 0 重新开始。不清掉旧记录的话，
+            # 重启后的第一条事件有可能正好撞上上一轮的最后一个 SEQ，
+            # 被当成"重传"丢掉——设备复位一次，丢一条刷卡记录。
+            LAST_SEQ["seen"] = False
+            LAST_SEQ["value"] = None
+        if LAST_SEQ["seen"] and seq == LAST_SEQ["value"]:
+            RX_STATS["duplicates"] += 1
+            _ack(ser, seq)              # 重复帧：补一个 ACK，但不再执行
+            return
+        LAST_SEQ["seen"] = True
+        LAST_SEQ["value"] = seq
+        RX_STATS["frames"] += 1
+        _ack(ser, seq)
+        line = payload
+    else:
+        RX_STATS["legacy"] += 1         # 老固件发的裸文本
+
     msg = sp.parse_line(line)
     kind = msg["kind"]
     if kind == "empty":
@@ -333,6 +418,14 @@ def handle_stm32_line(ser, client, cfg, line):
         occ = "occupied" if msg["occupied"] else "empty"
         queue_property(client, device_id, "Spot_state",
                        {"Parking_id": str(msg["spot_id"]), "Parking_state": occ})
+
+    elif kind == "spot_fault":
+        # 传感器故障单独上报：不能退化成 "occupied=False"，
+        # 否则云端看到的是"车位空了"，调度会把它派给下一辆车。
+        queue_property(client, device_id, "Spot_state",
+                       {"Parking_id": str(msg["spot_id"]), "Parking_state": "fault"})
+        append_event({"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "action": "sensor_fault", "spot_id": msg["spot_id"]})
 
     elif kind == "card":
         card = msg["card"]
@@ -407,49 +500,109 @@ def on_disconnect(client, userdata, rc):
     print("[GW] disconnected rc=%s, auto-reconnecting..." % rc, flush=True)
 
 
+# 云命令队列：paho 的 on_message 跑在它自己的网络线程里。
+# 原来这个回调里直接等串口 ACK（最多 5 秒），期间 paho 收不到任何东西，
+# keepalive 受影响、其他命令排队、断线重连也被拖慢。
+# 现在回调只做"解析 + 入队"，真正的执行在 command_worker 里。
+CMD_Q = queue.Queue(maxsize=64)
+
+
 def on_message(client, userdata, msg):
     topic = msg.topic
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
     except Exception:
         return
-    if "request_id=" in topic:
-        request_id = topic.rsplit("request_id=", 1)[-1]
-        cmd_name = payload.get("command_name", "")
-        service_id = payload.get("service_id", "")
-        paras = payload.get("paras", {})
-        print("[GW] command: %s/%s paras=%s" % (service_id, cmd_name, paras), flush=True)
-        cfg = userdata
-        ser = cfg.get("_serial")
-        if cmd_name == "capture_photo":
-            threading.Thread(target=capture_and_report, args=(ser, client, cfg),
-                             daemon=True).start()
-            resp = {"result_code": 0, "response_name": cmd_name,
-                    "paras": {"result": "success"}}
-        elif cmd_name == "open_barrier":
-            resp = handle_barrier_command(
-                ser, client, cfg, "open_barrier",
-                sp.build_open(psg.CREDENTIAL_REMOTE),
-                operator=(paras.get("operator") or "cloud"))
-        elif cmd_name == "close_barrier":
-            resp = handle_barrier_command(
-                ser, client, cfg, "close_barrier",
-                sp.build_close(psg.CREDENTIAL_REMOTE),
-                operator=(paras.get("operator") or "cloud"))
-        elif cmd_name == "query_status":
-            resp = {"result_code": 0, "response_name": "query_status", "paras": {
-                "result": "success",
-                "remaining_spots": STATE["remaining_spots"] if STATE["remaining_spots"] is not None else 0,
-                "plate_number": STATE["plate_number"] or "",
-                "barrier_state": STATE["barrier_state"] or "down"}}
-        else:
-            resp = {"result_code": 0, "response_name": cmd_name,
-                    "paras": {"result": "success"}}
-        client.publish(CMD_RESP_TOPIC.format(cfg["device_id"], request_id),
-                       json.dumps(resp, ensure_ascii=False))
-        print("[GW] command response sent: %s" % cmd_name, flush=True)
-    else:
+    if "request_id=" not in topic:
         print("[GW] msg: %s -> %s" % (topic, msg.payload[:200]), flush=True)
+        return
+    try:
+        CMD_Q.put_nowait((topic, payload))
+    except queue.Full:
+        print("[GW] command queue full, drop: %s" % topic, flush=True)
+
+
+def execute_command(client, cfg, topic, payload):
+    """真正执行一条云命令（在 command_worker 线程里）。"""
+    request_id = topic.rsplit("request_id=", 1)[-1]
+    cmd_name = payload.get("command_name", "")
+    service_id = payload.get("service_id", "")
+    paras = payload.get("paras", {})
+    print("[GW] command: %s/%s paras=%s" % (service_id, cmd_name, paras), flush=True)
+
+    ser = cfg.get("_serial")
+    if cmd_name == "capture_photo":
+        threading.Thread(target=capture_and_report, args=(ser, client, cfg),
+                         daemon=True).start()
+        resp = {"result_code": 0, "response_name": cmd_name,
+                "paras": {"result": "success"}}
+    elif cmd_name == "open_barrier":
+        resp = handle_barrier_command(
+            ser, client, cfg, "open_barrier",
+            sp.build_open(psg.CREDENTIAL_REMOTE),
+            operator=(paras.get("operator") or "cloud"))
+    elif cmd_name == "close_barrier":
+        resp = handle_barrier_command(
+            ser, client, cfg, "close_barrier",
+            sp.build_close(psg.CREDENTIAL_REMOTE),
+            operator=(paras.get("operator") or "cloud"))
+    elif cmd_name == "query_status":
+        resp = {"result_code": 0, "response_name": "query_status", "paras": {
+            "result": "success",
+            "remaining_spots": STATE["remaining_spots"] if STATE["remaining_spots"] is not None else 0,
+            "plate_number": STATE["plate_number"] or "",
+            "barrier_state": STATE["barrier_state"] or "down"}}
+    else:
+        resp = {"result_code": 0, "response_name": cmd_name,
+                "paras": {"result": "success"}}
+
+    client.publish(CMD_RESP_TOPIC.format(cfg["device_id"], request_id),
+                   json.dumps(resp, ensure_ascii=False))
+    print("[GW] command response sent: %s" % cmd_name, flush=True)
+
+
+def command_worker(client, cfg):
+    """唯一的云命令执行线程：串行执行，天然避免两条命令抢串口。"""
+    while True:
+        topic, payload = CMD_Q.get()
+        try:
+            execute_command(client, cfg, topic, payload)
+        except Exception as e:
+            print("[GW] command error: %s" % e, flush=True)
+        finally:
+            CMD_Q.task_done()
+
+
+UART_LINE_MAX = 512
+
+
+def split_uart_lines(buf, chunk, limit=UART_LINE_MAX):
+    """把新到的字节并入行缓冲，切出"完整行"。
+
+    返回 (剩余缓冲, 完整行列表, 被丢弃的超长行数)。
+
+    为什么必须攒到换行：readline() 超时会返回"半行"（没有 \\n）。半行直接
+    交给解析器，等于把 "BARRIER:OP" 当成一条未知命令，而真正的
+    "BARRIER:OPEN" 的下半截永远拼不回来——一次开闸就这么丢了。
+    超长（超过 limit 还没有换行）说明链路在灌噪声，整段丢弃重新同步，
+    免得缓冲区无限增长变成一个慢性的内存泄漏。
+    """
+    buf = buf + (chunk or b"")
+    lines = []
+    dropped = 0
+    while True:
+        nl = buf.find(b"\n")
+        if nl < 0:
+            break
+        line, buf = buf[:nl + 1], buf[nl + 1:]
+        if len(line) > limit:
+            dropped += 1
+            continue
+        lines.append(line)
+    if len(buf) > limit:
+        dropped += 1
+        buf = b""
+    return buf, lines, dropped
 
 
 def watch_serial(client, cfg):
@@ -459,6 +612,7 @@ def watch_serial(client, cfg):
         print("[GW] pyserial not installed, UART disabled", flush=True)
         return
     ser = None
+    rx_buf = b""
     while True:
         try:
             if ser is None:
@@ -466,9 +620,19 @@ def watch_serial(client, cfg):
                 cfg["_serial"] = ser
                 print("[GW] serial %s opened @%d" % (port, baud), flush=True)
             raw = ser.readline()
-            if raw:
-                handle_stm32_line(ser, client, cfg,
-                                  raw.decode("utf-8", errors="replace"))
+            if not raw:
+                continue
+            rx_buf, lines, dropped = split_uart_lines(rx_buf, raw)
+            if dropped:
+                print("[GW] UART dropped %d oversized line(s)" % dropped, flush=True)
+            for raw_line in lines:
+                # 优先 UTF-8；不合法就退回 latin-1（字节透明，绝不丢字节），
+                # 否则一个干扰字节就让整帧 CRC 对不上、白白丢掉一条命令。
+                try:
+                    line = raw_line.decode("utf-8")
+                except UnicodeDecodeError:
+                    line = raw_line.decode("latin-1")
+                handle_stm32_line(ser, client, cfg, line)
         except Exception as e:
             print("[GW] serial error: %s, retry in 5s" % e, flush=True)
             try:
@@ -500,6 +664,25 @@ def watch_fifo(client, cfg):
                              daemon=True).start()
 
 
+def resolve_ca_path(cfg):
+    """返回可用的 CA 证书路径；缺失直接抛错。
+
+    绝不降级成 CERT_NONE：那等于把 MQTTS 变成"加密但不验身份"，中间人
+    可以随便冒充 broker，设备密钥会被直接送出去。宁可不启动，也不静默降级。
+    """
+    ca = (cfg.get("ca_cert") or "").strip()
+    if not ca:
+        # 空字符串会被 os.path.join 拼成"代码目录"本身，exists() 还会返回
+        # True——于是拿着一个目录去 tls_set，最后在握手阶段报一个跟证书
+        # 毫无关系的错。这里显式拦掉。
+        raise RuntimeError("cloud_config.json 未配置 ca_cert，拒绝以无校验方式连接云端。")
+    if not os.path.isabs(ca):          # 绝对路径直接用；相对路径按代码目录解析
+        ca = os.path.join(BASE, ca)
+    if not os.path.exists(ca):
+        raise RuntimeError("CA 证书缺失：%s。拒绝以无校验方式连接云端。" % ca)
+    return ca
+
+
 def main():
     global SESSION, PUB_Q, PUB_QUEUE_SIZE
     cfg = load_config()
@@ -515,17 +698,13 @@ def main():
         client = mqtt.Client(client_id=cfg["client_id"], protocol=mqtt.MQTTv311)
     client.username_pw_set(cfg["username"], cfg["password"])
     if cfg["port"] == 8883:
-        ca = os.path.join(BASE, cfg.get("ca_cert", ""))
-        if os.path.exists(ca):
-            client.tls_set(ca_certs=ca)
-        else:
-            client.tls_set(cert_reqs=ssl.CERT_NONE)
-            print("[GW] WARN: CA cert missing, skip verify", flush=True)
+        client.tls_set(ca_certs=resolve_ca_path(cfg))
     client.user_data_set(cfg)
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
     threading.Thread(target=publish_worker, args=(client, cfg), daemon=True).start()
+    threading.Thread(target=command_worker, args=(client, cfg), daemon=True).start()
     threading.Thread(target=watch_serial, args=(client, cfg), daemon=True).start()
     threading.Thread(target=watch_fifo, args=(client, cfg), daemon=True).start()
     print("[GW] connecting %s:%d (device=%s)" % (cfg["hostname"], cfg["port"], cfg["device_id"]), flush=True)

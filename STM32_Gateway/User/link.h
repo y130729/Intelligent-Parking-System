@@ -6,37 +6,41 @@
 /* 应用层链路协议（STM32 <-> 树莓派）
  *
  * 分层：state_machine / main（应用）
- *         -> link（协议：拼/解协议字符串，本文件）
- *           -> pi_link（驱动：USART2 字节收发 + 行提取）
+ *         -> link（业务报文：拼 payload、解析 reason，本文件）
+ *           -> pi_link（传输：帧格式、CRC、序号、ACK、重传）
+ *             -> uart_tx + 环形缓冲（驱动）
  *
- * 目的：业务代码里不再出现传输细节。原来每处动作都写成
- *   #if WIFI_ENABLE
- *       ESP8266_SendToClient("BARRIER:OPEN");
- *   #else
- *       PI_UART_SendString("BARRIER:OPEN\r\n");
- *   #endif
- * 业务逻辑被传输层开关切成了两半；现在统一成 Link_xxx()。
+ * 业务代码里不再出现传输细节，也不再有 #if WIFI_ENABLE 分支。
  *
- * 协议定义见 Readme「串口协议」一节，与树莓派侧 stm32_protocol.py 对应。
+ * 帧格式见 link_frame.h；payload 语义见 Readme「串口协议」。
  */
 
-/* 开闸凭证来源，需与树莓派侧 passage.py 的取值一致 */
-#define LINK_REASON_CARD    "card"
-#define LINK_REASON_PLATE   "plate"
-#define LINK_REASON_REMOTE  "remote"
+/* 开闸凭证来源 —— 白名单枚举。
+ * 必须是枚举而不是裸字符串：reason 来自串口输入，用字符串+sprintf
+ * 会被"OPEN:" + 63 字节任意内容撑爆 32 字节缓冲（栈溢出）。
+ * 枚举把可能性收敛成 3 个值，任何别的输入都在解析层被拒收。
+ * 取值需与树莓派侧 passage.py 一致。 */
+typedef enum {
+    LINK_REASON_CARD = 0,
+    LINK_REASON_PLATE = 1,
+    LINK_REASON_REMOTE = 2
+} LinkReason;
 
-/* 初始化链路并发 LINK:OK */
-void Link_Init(void);
+const char  *Link_ReasonToString(LinkReason reason);
+/* 解析失败返回 LINK_REASON_REMOTE 并把 *ok 置 0（调用方应拒收） */
+LinkReason   Link_ReasonFromString(const char *s, uint8_t *ok);
 
-/* 主循环调用：处理树莓派下发的命令 */
-void Link_Process(void);
+void Link_Init(void);       /* 初始化链路并发 LINK:OK */
+void Link_Process(void);    /* 主循环：收命令 + ACK 超时重传 */
+void Link_Tick(void);
 
 /* 上报类（STM32 -> 树莓派） */
 void Link_ReportRemainingSpots(uint8_t remaining);
 void Link_ReportSpot(uint8_t spot_id, uint8_t occupied);
 void Link_ReportCard(const uint8_t *card_id);
 void Link_RequestCapture(void);
-void Link_ReportBarrierUp(const char *reason);
+void Link_ReportBarrierUp(LinkReason reason);
 void Link_ReportBarrierDown(void);
+void Link_ReportSensorFault(uint8_t spot_id);
 
 #endif /* __LINK_H */

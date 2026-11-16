@@ -51,6 +51,7 @@ extern "C"
  * INCLUDES
  */
 #include "ZComDef.h"
+#include "ioCC2530.h"   /* WDCTL 等外设寄存器 */
 
 /*********************************************************************
  * CONSTANTS
@@ -86,6 +87,32 @@ extern "C"
 // Parking Spot Number - Device's parking spot identifier
 // Modify this value for each parking node device
 #define PARKINGNODE_SPOT_NUM                    1
+
+/* 超声波采样与滤波
+ *
+ * 单次测量会被车体形状/地面反射干扰，所以取多次的中值；
+ * 只有中值还不够——阈值边界上会来回抖，所以再加 2cm 迟滞，
+ * 并且要求连续 3 次一致才真正改判。
+ *
+ * 100ms 周期下，三次确认带来约 300ms 额外延迟：
+ * 对「车停进车位」这种秒级事件完全可接受，换来的是不再抖动的状态。 */
+#define PARKINGNODE_ULTRASONIC_SAMPLES          5
+#define PARKINGNODE_ULTRASONIC_MIN_VALID        3
+#define PARKINGNODE_ULTRASONIC_MAX_CM           400
+#define PARKINGNODE_ULTRASONIC_HYST_CM          2
+#define PARKINGNODE_ULTRASONIC_CONFIRM          3
+
+/* 看门狗（CC2530 内置，WDCTL 寄存器）
+ * MODE=00 看门狗模式；INT=00 超时 1s；CLR[7:4] 清计数器。
+ * 清狗必须按手册写"两拍"：先 0xA 再 0x5（WDCTL = 0xA0 然后 0x50），
+ * 单写 0xA0 不算清狗——一秒钟后照样复位。这种错误在台面上很难发现：
+ * 节点看起来"能工作"，只是每隔一秒悄悄重启、重新入网。
+ * 只在入网成功后启动：入网前 OSAL 可能长时间没有应用事件，
+ * 提前开狗会造成「还没连上就复位」的启动循环。
+ * 入网后若应用任务卡死，1 秒内自动复位重连。
+ * 喂狗周期 = 100ms + 抖动(<=255ms) + 单次测量耗时(<=350ms)，最坏约 700ms < 1s。 */
+#define PARKINGNODE_WDT_START()   do { WDCTL = 0x00; } while (0)
+#define PARKINGNODE_WDT_FEED()    do { WDCTL = 0xA0; WDCTL = 0x50; } while (0)
 
 
 /*********************************************************************

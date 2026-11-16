@@ -1,6 +1,6 @@
 # 智能停车场管理系统项目说明文档
 
-> 最后更新：2026-08-21。本文档覆盖 CC2530 车位节点、STM32 网关、树莓派网关（车牌识别 + 华为云 MQTT）三部分；微信小程序与网页端不在本文档范围内。
+> 最后更新：2026-11-16。本文档覆盖 CC2530 车位节点、STM32 网关、树莓派网关（车牌识别 + 华为云 MQTT）三部分；微信小程序与网页端不在本文档范围内。
 
 ## 1. 项目概述
 
@@ -24,7 +24,7 @@
 │           树莓派 Zero WH 网关                 │
 │   plate_gateway.py: MQTT + 串口 + 拍照识别    │
 └──────────────────────┬───────────────────────┘
-                       │ USART2 115200 文本协议
+                       │ USART2 115200 帧协议（#VER SEQ LEN payload *CRC + ACK）
                        ▼
 ┌──────────────────────────────────────────────┐
 │            STM32F103C8T6 网关                 │
@@ -56,8 +56,11 @@
 HC-SR04 测距 -> CC2530 节点（每 100ms + 随机抖动）
   -> ZigBee P2P 帧 PXX:XXXcm -> 协调器 UART0 原样转发
   -> STM32 USART3 中断解析（距离 < 20cm 判占用）
-  -> spot_occupied[] 变化 -> SPOT:<id>:<0|1> + SPOTS:<n>
+  -> spot_occupied[] 变化 -> 标记 dirty 位图 -> 主循环逐条 SPOT:<id>:<0|1> + SPOTS:<n>
   -> 树莓派 -> 华为云 Spot_state 属性上报
+回波超时 / 无回波 -> 节点上报 PXX:FAULT（不再退化成"距离超限=空位"）
+  -> STM32 -> SPOT:<id>:FAULT -> 树莓派上报 Parking_state=fault
+     （坏传感器绝不能被当成"空位"，否则云端会把车位派给下一辆车）
 ```
 
 ### 2.2 车辆进出数据流
@@ -70,7 +73,8 @@ HC-SR04 测距 -> CC2530 节点（每 100ms + 随机抖动）
      ② 刷卡：MFRC522 读卡 -> STM32 Flash 白名单验证通过 -> 直接抬杆
   -> 任一凭证先命中即开闸一次（会话去重；凭证来源 card/plate/remote 随
      BARRIER:OPEN:<reason> 上报，写入通行记录，远程开闸另记操作人）
-  -> 3s 后落杆（BARRIER:CLOSE，会话结束）；无效卡 / 未登记车牌 / 车位已满：提示后回 IDLE
+  -> 落杆前先查防砸红外（Barrier_CanClose），确认杆下无人再落杆
+     （BARRIER:CLOSE，会话结束）；无效卡 / 未登记车牌 / 车位已满：提示后回 IDLE
   -> PLATE:<车牌> 回传 OLED 第 4 行显示
 离线兜底：树莓派/网络不可用时，STM32 本地刷卡白名单仍可开闸
 ```
@@ -113,20 +117,23 @@ CAPTURE（STM32 红外触发，或本地 echo capture > /tmp/plate_cmd）
 | 串口 1（调试） | USART1 | PA9/PA10，115200 | 日志输出 + 白名单命令 |
 | 串口 2（树莓派） | USART2 | PA2/PA3，115200 | 与树莓派通信 |
 | 串口 3（协调器） | USART3 | PB10/PB11，115200 | 接收 CC2530 车位帧 |
-| Flash 白名单 | 内置 | 0x08007000 | RFID 白名单持久化（最多 20 张） |
+| Flash 白名单 | 内置 | 0x0800F000 / 0x0800F400 | RFID 白名单持久化（A/B 双槽 + CRC，最多 20 张） |
 | Flash 故障记录 | 内置 | 0x0800FC00 | 异常复位现场（最后一页，Keil 下载不覆盖） |
 
 Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
 
 | 地址范围 | 用途 |
 |---|---|
-| `0x08000000` - `0x08006FFF` | 应用程序（代码**不得越过** 0x08007000，否则白名单擦写会擦掉代码） |
-| `0x08007000` - `0x080073FF` | 刷卡白名单（`flash_storage.c`） |
+| `0x08000000` - `0x0800EFFF` | 应用程序（代码**不得越过** 0x0800F000，否则白名单擦写会擦掉代码） |
+| `0x0800F000` - `0x0800F3FF` | 刷卡白名单 A 槽（`flash_storage.c`） |
+| `0x0800F400` - `0x0800F7FF` | 刷卡白名单 B 槽（A/B 交替写，写完才切换"当前生效槽"） |
 | `0x0800FC00` - `0x0800FFFF` | 异常现场记录（`fault_log.c`，位于 IROM1 之外，固件升级也不会被擦） |
 
-> IROM1 = `0x08000000 + 0x7000`（28KB）。这个值有三个作用：应用超限时**链接器直接报错**，而不是让代码悄悄压到白名单扇区；Keil 的下载范围不含 `0x08007000`，所以**烧写固件不会擦掉已登记的卡白名单**；故障记录页也落在下载范围之外，被保留下来。
+> IROM1 = `0x08000000 + 0xF000`（60KB）。作用：应用超限时**链接器直接报错**，而不是让代码悄悄压到白名单扇区；Keil 的下载范围不含 `0x0800F000` 之后，所以**烧写固件不会擦掉已登记的卡白名单**；故障记录页也落在下载范围之外，被保留下来。
 >
-> 当前占用：Code 21496 + RO 3832 + RW 80 = 25408 字节（约 24.8KB / 28KB，88.6%）。接近上限时先删功能，不要放大 IROM1。
+> 当前占用：Code 25744 + RO 3968 + RW 132 = 29844 字节（约 29.1KB / 60KB）。加入帧协议、发送队列、非阻塞状态机后代码增长，白名单因此从 `0x08007000` 挪到更靠后的位置，应用区仍有 30KB 余量。
+>
+> 分区迁移：老固件把白名单放在 `0x08007000`。新固件启动时如果新槽为空、老地址数据合理，会**一次性迁移**过去并打印日志——不迁移等于"升级完车主的卡全没了"，旧地址随后不再使用。
 
 ### 3.3 树莓派 Zero WH
 
@@ -148,9 +155,26 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
 核心功能：
 - 角色选择：跳线（`readCoordinatorJumper`）决定协调器 / 路由 / 终端角色，同一工程烧录
 - 节点测距：HC-SR04 触发 20us 脉冲、回波计时，距离(cm) = 计时(us) / 58；上报周期 100ms + 0~255ms 随机抖动
-- 数据帧：`PXX:XXXcm`（9 字节）正常数据；距离 >= 1000cm 时 `PXX:err`（7 字节）
+- **有界等待**：回波高/低电平都不用 `while(ECHO_PIN == x);` 死等，而是带计数的循环
+  （`ULTRA_RISE_TIMEOUT_ITERS` / `ULTRA_ECHO_TIMEOUT_ITERS`）。传感器线松脱、车顶把
+  回波打飞时，节点只是这一次测距失败，OSAL 任务照常运行——原来那一行会让整个
+  ZigBee 节点永久卡死、彻底失联，而且现场看起来只是"这个车位不更新了"
+- **采样与滤波**：单次测距连采 5 个点取中值（丢弃极大值/极小值），至少 3 个有效
+  点才算一次成功；占用判定加 2cm 迟滞、连续 3 次一致才翻转状态
+  （`ULTRASONIC_SAMPLES` / `MIN_VALID` / `HYST_CM` / `CONFIRM`）。
+  超声波受温度、车身形状、地面反射影响很大，单点跳变会让云端看到"车位反复占用/空闲"
+- 数据帧：`PXX:XXXcm`（9 字节）正常数据；距离 >= 1000cm 时 `PXX:err`（7 字节）；
+  测距失败/回波超时时上报 `PXX:FAULT`（**同样是 9 字节定长**）
+- **故障不能伪装成空位**：`FAULT` 是独立报文，不会被解析成"距离超限 = 空闲"。
+  原来的错误帧错在长度（按 9 字节发实际只有 7 字节），STM32 的 `sscanf("%hucm")`
+  解析失败后**静默丢弃**，故障就这么消失了
+- **看门狗**：入网成功后启动 CC2530 片内看门狗（`WDCTL`，约 1s），每个上报周期喂狗；
+  任务卡死 1 秒内自动复位重新入网
 - 上报：P2P 簇（Cluster 4）单播到协调器（0x0000）；协调器收到后经 UART0 原样转发并追加 `\r\n` 给 STM32 USART3
 - 配置（`ParkingNode.h`）：端点 `PARKINGNODE_ENDPOINT=20`、Profile `0x0F08`、车位号 `PARKINGNODE_SPOT_NUM`（每个节点改一处）
+- 说明：回波计时目前仍用 `Delay_10us()` 轮询而非 Timer1 输入捕获。用定时器捕获
+  更准，但 CC2530 的 Timer1 与 MAC 层定时器存在资源冲突，手上没有第二块节点板
+  做回归，因此先保证"不会卡死 + 滤波"，把捕获留作后续（见第 9 节）
 
 ### 4.2 STM32_Gateway（Keil MDK）
 
@@ -160,15 +184,19 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
 | `User/main.c` | 主循环：状态机、OLED 刷新、链路处理、车位变化上报、喂狗 |
 | `User/state_machine.c` | 车辆进出状态机、剩余车位管理 |
 | `User/link.c` | 应用层链路协议：把业务动作拼成 SPOTS/SPOT/CARD/CAPTURE/BARRIER 报文 |
-| `Hardware/pi_link.c` | USART2 与树莓派通信（文本行协议） |
-| `Hardware/Serial.c` | USART3 接收 CC2530 帧并解析车位状态 |
+| `Hardware/pi_link.c` | USART2 传输层：帧编解码、ACK、超时重传、按 SEQ 去重、超长行丢弃后重新同步 |
+| `Hardware/link_frame.c` | 帧格式与 CRC-8/ATM（纯函数，不碰硬件，可在 PC 上单测） |
+| `Hardware/uart_tx.c` | 发送环形队列 + TXE 中断，printf/报文不再阻塞主循环 |
+| `Hardware/Serial.c` | USART3 接收 CC2530 帧；车位变化记 dirty 位图，支持 `PXX:FAULT` |
+| `Hardware/barrier.c` | 落杆前安全联锁（防砸红外），限位/电流检测的编译开关 |
+| `System/dwt.c` | DWT 周期计数器，用来实测 ISR 耗时 |
 | `Hardware/USART.c` | USART1 调试串口 + `addcard/delcard/listcards` 白名单命令 |
 | `Hardware/OLED.c` | OLED 软 I2C 驱动 + 16x16 中文字库（31 省份简称） |
 | `Hardware/MFRC522.c` / `Infrared.c` / `Servo.c` / `flash_storage.c` | 外设驱动 |
 | `Hardware/watchdog.c` | 独立看门狗（IWDG，4s）：程序卡死时自动复位 |
 | `System/fault_log.c` | 异常现场记录：写 Flash 保留页后复位，开机打印并清除 |
 
-分层：`state_machine`（应用）-> `link`（协议）-> `pi_link`（UART 驱动）。
+分层：`state_machine`（应用）-> `link`（业务报文）-> `pi_link`（帧/ACK/重传）-> `uart_tx`（发送队列）-> 硬件。
 业务代码不再直接拼协议字符串，也不再出现"WiFi / 串口"两套传输的编译开关分支
 （原 `esp8266.c`、`mqtt_report.c`、`cc2530_parser.c` 已删除）。
 
@@ -177,24 +205,61 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
   喂狗条件依赖 SysTick 走时，若时基本身停摆则不会喂狗，照样复位。
 - **异常复位不留谜团**：HardFault/MemManage/BusFault/UsageFault 统一记录
   CFSR/HFSR/BFAR/MMFAR 到 0x0800FC00 后复位，下次开机在调试串口打印现场。
-- **有超时的等待**：MFRC522 软复位等待加了计数上限，芯片虚焊不再把主循环卡死。
+- **有超时的等待**：MFRC522 软复位等待加了计数上限，芯片虚焊不再把主循环卡死；
+  所有寄存器轮询循环都带超时计数，没有 `while(flag);` 这种写法。
+- **中断只做最少的事**：红外 EXTI 里只做"读电平 + 置 volatile 标志 + 记 DWT 起点"，
+  打印、状态机、串口发送全部回到主循环。原来在 ISR 里 `USART_Printf`，115200 下
+  几十字节要阻塞好几毫秒，而且 1KB 静态缓冲不可重入。
+- **ISR 耗时是量出来的**：`ReportIsrTiming()` 打印最坏周期数，
+  `cycles / 72` 即微秒数，可以直接回答"你的中断有多快"。
+- **发送不阻塞**：`uart_tx` 环形队列 + TXE 中断；队列满时丢新字节并累加
+  `dropped` 计数（`UartTx_Pending()` 可查队列深度），不会在主循环里等一个字节发完。
+  （不用 DMA 是因为报文只有十几字节、发送频率极低，DMA 的配置与出错恢复成本
+  反而更高；这个取舍写在 `uart_tx.c` 的注释里。）
+- **车位事件不丢**：20 个节点的变化用 32 位 `spot_dirty_mask` 位图记录，主循环
+  每轮按位排空。原来只有一个 `pending_spot_id/status` 槽，同一轮有两个节点变化时
+  前一个直接被覆盖——多节点项目里这是必然踩的。
+- **白名单掉电安全**：A/B 双槽 + 记录头（magic/version/seq/len/crc32/commit），
+  先写非活动槽、回读校验通过、最后写 commit 标志。写到一半掉电，旧槽仍然有效。
+- **没有默认卡后门**：不再在空库时自动写入一张固定的示例卡。空库就是空库，必须由产测
+  工装或管理员显式 `addcard`——内置默认卡等于一把公开的钥匙。
 
 串口总览：
 | 串口 | 引脚 | 波特率 | 对端 | 用途 |
 |---|---|---|---|---|
 | USART1 | PA9/PA10 | 115200 | 调试终端 | 日志 + 白名单增删查命令 |
-| USART2 | PA2/PA3 | 115200 | 树莓派 /dev/serial0 | 上行 SPOTS/SPOT/CARD/BARRIER:OPEN[:reason]/BARRIER:CLOSE/CAPTURE/LINK:OK，下行 PLATE/OPEN[:reason]/CLOSE[:reason] |
+| USART2 | PA2/PA3 | 115200 | 树莓派 /dev/serial0 | 帧协议：上行 SPOTS/SPOT[:FAULT]/CARD/BARRIER:OPEN[:reason]/BARRIER:CLOSE/CAPTURE/LINK:OK/ACK，下行 PLATE/OPEN[:reason]/CLOSE[:reason]/ACK |
 | USART3 | PB10/PB11 | 115200 | CC2530 协调器 | 接收 `PXX:XXXcm` 车位帧 |
 
 状态机（`state_machine.c`）：
+
 | 状态 | 描述 | 触发/退出 |
 |---|---|---|
 | `STATE_IDLE` | 空闲 | 红外遮挡 -> WAITING_RFID |
-| `STATE_WAITING_RFID` | 等待刷卡/车牌 | 读卡白名单通过且有车位 -> BARRIER_UP；树莓派车牌命中发 OPEN:plate 同样开闸；红外离开或验证失败回 IDLE |
-| `STATE_BARRIER_UP` | 抬杆 | 3s 后自动 -> BARRIER_DOWN |
-| `STATE_BARRIER_DOWN` | 落杆 | 1s 后 -> IDLE |
+| `STATE_WAITING_RFID` | 等待刷卡/车牌 | 白名单卡命中 或 收到 OPEN:plate -> OPENING；超时 `WAIT_CARD_TIMEOUT_MS`(30s) 无凭证 -> IDLE |
+| `STATE_OPENING` | 舵机上行（`BARRIER_MOVE_MS` 1500ms） | 行程结束 -> OPEN |
+| `STATE_OPEN` | 开闸保持 | 保持 `BARRIER_UP_DELAY_MS`(3s) -> CLOSING |
+| `STATE_CLOSING` | 舵机下行 | 行程结束 -> IDLE |
+| `STATE_ERROR` | 错误提示（非阻塞） | `ERROR_DISPLAY_DELAY_MS` 到时 -> IDLE |
+| `STATE_FAULT` | 安全故障 | 保持开闸，等障碍解除/人工干预 |
 
-RFID 验证流程（离线兜底）：红外触发 -> 等待刷卡 -> MFRC522_Request/Anticoll 取卡号 -> `FlashStorage_IsCardValid` 查白名单（Flash 0x08007000，默认卡 7506D506）-> 有剩余车位则抬杆并回发 `BARRIER:OPEN:card`，无效卡/车位已满提示 3s 后回 IDLE；车牌识别为并行第二凭证，树莓派侧过闸会话内任一凭证先命中即开闸一次（去重）
+时序是"截止时间驱动"：每个状态只记一个 `deadline`，主循环用
+`(int32_t)(GetTick() - deadline) >= 0` 判断到期（自带回绕处理），函数立即返回。
+原来的写法是 `state_timer += 10` 假设主循环严格 10ms 一轮，但
+`Servo_Up()/Servo_Down()` 各自 `delay_ms(1500)`、错误提示 `delay_ms(3000)`，
+"3 秒"实际可能是 6 秒以上，抬落杆时序整体是漂的，而且串口在延时期间无人读取。
+现在舵机只"设角度"，等待交给状态机。
+
+RFID 验证流程（离线兜底）：红外触发 -> 等待刷卡 -> MFRC522_Request/Anticoll 取卡号 -> `FlashStorage_IsCardValid` 查白名单（Flash A/B 槽）-> 有剩余车位则抬杆并回发 `BARRIER:OPEN:card`，无效卡/车位已满提示 3s 后回 IDLE；车牌识别为并行第二凭证，树莓派侧过闸会话内任一凭证先命中即开闸一次（去重）
+
+道闸安全逻辑（`barrier.c`）：
+- `Barrier_CanClose()`：落杆前先查杆下防砸红外，有人/有车则**不落杆**，停在 `STATE_FAULT`
+- `BARRIER_HAS_LIMIT_SWITCHES` / `BARRIER_HAS_CURRENT_SENSE`：限位开关与电机电流
+  检测的编译开关，当前原型机（SG90 舵机）没有这两路信号，宏置 0；接真实道闸时
+  打开即可，安全逻辑已经预留
+- `Barrier_EmergencyRelease()`：断电/故障时直接关 PWM，让人可以手动抬杆
+- 原则：**故障默认保持开闸或停止**，绝不"出错就落杆"。真实停车场里这是人身安全
+  事故，原型阶段就要把策略定下来，而不是等换执行机构时再补
 
 OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 4 行 `Plate:<车牌>`（16x16 中文，方向已修复）
 
@@ -210,15 +275,16 @@ OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 
 | `plate_matcher.py` | 车牌档案模糊匹配（加权编辑距离，数据源 vehicles.json） |
 | `plate_format.py` | 中国车牌结构规则：长度/字符集合法性、I/O 修复、候选窗口打分 |
 | `passage.py` | 单次过闸会话（带 TTL）与开闸凭证判定（card/plate/remote） |
-| `stm32_protocol.py` | STM32 行协议解析与构造（含 OPEN/CLOSE 的 reason 字段） |
+| `stm32_protocol.py` | STM32 行协议解析与构造（含 reason 字段）+ 帧编解码（CRC-8/ATM、SEQ、ACK），与固件 `link_frame.c` 一一对应 |
 | `plate_config.py` | 配置加载与 rpicam-still 命令构造（网关与调试工具共用） |
 | `plate_camera.py` | 手动拍照 -> 识别工具 |
 | `vehicles.json` | 车辆档案：车牌 + 关联卡号 + 车主（车卡融合数据源，含示例 3 车） |
-| `cloud_config.json` | 华为云 MQTT 连接、串口、拍照参数、会话 TTL 等配置 |
+| `cloud_config.json` | 华为云 MQTT 连接、串口、拍照参数、会话 TTL 等配置（**不含密码**） |
+| `cloud_secret.json` | 设备密钥（`chmod 600`，已在 `.gitignore`，模板见 `cloud_secret.example.json`） |
 | `requirements.txt` | pip 依赖（paho-mqtt / pyserial；OpenCV 建议 apt 安装） |
 | `huawei_iotda_product_model.json` | 云端产品模型（已导入） |
 | `test/` | 测试图：test.jpg->T234J5、test2.jpg->EM456U、test3.jpg->K4Z567 |
-| `tests/` | 自动化测试（69 项，纯逻辑，无需相机/网络/硬件） |
+| `tests/` | 自动化测试（123 项，纯逻辑，无需相机/网络/硬件；含帧编解码 / fuzz / 半行 / 并发写 / 密钥加载） |
 | `deploy/` | systemd 服务文件与安装脚本 |
 | `archive/` | 历史备份（旧 pi_cloud.py 等） |
 
@@ -226,6 +292,17 @@ OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 
 - **线程模型**：`watch_serial` 只做"读串口 + 解析 + 入队"，`publish_worker` 是唯一向 MQTT 发布属性的线程。
   这样云端网络抖动不会阻塞本地串口链路（此前 `wait_for_publish(5)` 放在串口线程里，
   网络一慢串口就停止读取、缓冲溢出丢行）
+- **云命令不堵 MQTT 线程**：`on_message` 只把命令放进 `CMD_Q`，由单独的
+  `command_worker` 线程串行执行。原来在回调里等串口 ACK（最长 5s），
+  paho 的网络线程被挂住，keepalive、重连、后续命令全部排队
+- **串口写加锁**：多个线程都会发（命令线程发 OPEN/CLOSE、拍照线程发 PLATE），
+  pyserial 的 `write` 不是原子的，两帧交错就是"半帧 + 半帧"。所有写都过
+  `SERIAL_LOCK`，并整帧一次写出 + `flush`
+- **半行不解析**：`readline()` 超时会返回没有 `\n` 的半行，直接解析会把
+  `BARRIER:OP` 当成一条未知命令、真正的 `BARRIER:OPEN` 永远拼不回来。
+  现在攒到换行才切（`split_uart_lines`），超过 512 字节仍无换行则整段丢弃重新同步
+- **帧层去重**：收到重复 SEQ 只补 ACK、不再执行；坏 CRC 直接丢并计数（`RX_STATS`）。
+  老固件发的裸文本仍然兼容（`FRAME_LEGACY` 分支）
 - 车卡融合：`CAPTURE` 开启单次过闸会话，车牌命中 `vehicles.json` 且会话未开闸时自动发 `OPEN:plate`；
   `CARD` 按档案记录 card_hit/card_unknown；`BARRIER:OPEN` 标记会话已开闸避免重复开闸
 - 会话超时：会话 TTL 默认 60s（`passage_ttl_s`），车走掉后下一辆车不会被记成上一次会话的凭证
@@ -236,11 +313,17 @@ OLED 显示：第 1 行标题、第 2 行 `Spots: x/20`、第 3 行状态、第 
 - 拍照互斥：`CAPTURE_STATE` 锁保证同一时刻只有一次拍照+OCR，忙时挂起补拍一次；
   `rpicam-still` 失败重试 2 次、单次超时 15s（原来重试 3 次 x 90s，最坏一次触发能占住近 5 分钟）
 - 云端命令：`open_barrier` / `close_barrier`（转发 `OPEN:remote`/`CLOSE:remote` 给 STM32，5s 超时等待 `BARRIER:` 应答后回执 success/failed）、`query_status`（按缓存直接应答）、`capture_photo`
+- **密钥外置**：密码优先级 `环境变量 PARKING_MQTT_PASSWORD` > `cloud_secret.json`（会检查
+  文件权限是否宽于 0600 并告警），两者都没有就**直接报错退出**。配置文件里只保留
+  "连哪里"，"凭什么连"放在版本库之外
+- **TLS 缺 CA 就拒绝启动**：CA 证书不存在时抛 `RuntimeError`，绝不退化成
+  `CERT_NONE`——那等于"加密但不验身份"，中间人可以冒充 broker 直接拿走设备密钥
 - 断线自动重连 MQTT；串口异常关闭后 5s 重试
 
-测试：`python -m unittest discover -s raspberrypi/tests -t raspberrypi`
+测试：`python -m unittest discover -s raspberrypi/tests -t raspberrypi`（123 项，无需相机/网络/硬件）
 （覆盖车牌结构规则、车牌库匹配、通行会话 TTL、行协议解析、拍照参数构造、
-以及"串口线程绝不调用网络"的网关流程回归）
+"串口线程绝不调用网络"的网关流程回归，以及帧编解码 / 随机字节 fuzz /
+半行拼接 / 并发写不交错 / 重复 SEQ 不重复执行 / 密钥缺失报错 / CA 缺失拒启动）
 
 车牌识别（`plate_recognition.py`）流程：
 HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0~4.0、目标 3.15、最小面积与最小宽度按图像尺寸取比例，换分辨率不用改阈值）-> minAreaRect 透视校正 -> CLAHE 增强 -> Tesseract LSTM OCR（psm 8->13->7，白名单 A-Z0-9）-> 校正图 OCR 为空时回退识别蓝色包围盒 -> `plate_format.post_process` 按车牌结构（6 位燃油 / 7 位新能源、I/O 修复）选窗口
@@ -258,13 +341,46 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 - 节点 -> 协调器：ZigBee P2P 簇（Cluster 4），Payload 为 ASCII 文本帧：
   - `PXX:XXXcm`：车位号 XX（01-20）+ 距离 XXX cm（9 字节）
   - `PXX:err`：距离超限 >= 1000cm（7 字节）
+  - `PXX:FAULT`：测距失败（回波超时/无回波），9 字节定长；STM32 转成
+    `SPOT:<id>:FAULT`，与"空位"明确区分
+- 节点侧限制：单次测距有界等待（不会卡死），5 点中值滤波 + 2cm 迟滞 + 连续 3 次确认
 - 协调器 -> STM32：UART0 原样转发文本帧并追加 `\r\n`（STM32 USART3，115200 8N1）
 
 ### 5.2 STM32 <-> 树莓派串口协议（USART2）
 
 串口：STM32 USART2 (PA2/PA3) <-> 树莓派 /dev/serial0，波特率 115200，8N1
 
-帧格式：ASCII 文本行，以 `\r\n`（或 `\n`）结尾，单行不超过 64 字节
+**帧格式**（`link_frame.c` / `stm32_protocol.py`，两端逐位一致）
+
+```
+'#' VER SEQ(2) LEN(2) PAYLOAD '*' CRC(2)
+ 1   1    2      2     LEN      1     2      = 9 + LEN 字节
+
+例： #1 05 09 OPEN:card * <CRC>
+```
+
+| 字段 | 说明 |
+|---|---|
+| `#` | 帧起始 |
+| `VER` | 协议版本，当前 `1`；版本不符直接判非法（避免只升级一端时互发"能收但读不懂"的帧） |
+| `SEQ` | 0~255 循环序号，用于重传去重 |
+| `LEN` | payload 字节数（UTF-8 计字节，上限 63） |
+| `CRC` | CRC-8/ATM（多项式 0x07，初值 0x00），覆盖 VER..PAYLOAD |
+
+为什么是"文本外壳 + CRC"而不是纯二进制 + COBS：payload 只有十几字节、115200
+波特率，纯二进制省不下几个字节；而排障时 `cat /dev/serial0` 就能直接看清
+`OPEN:card` 这种语义。真到 460800 以上或 payload 上百字节，再换二进制才有意义。
+
+**链路机制**
+
+| 机制 | 实现 |
+|---|---|
+| 完整性 | CRC-8；坏帧丢弃并计数（固件 `PiLinkStats`、树莓派 `RX_STATS`） |
+| 重传 | 发出后 300ms 未收到 `ACK:<SEQ>` 则重发，最多重发 2 次；仍失败则丢弃并计数 |
+| 去重 | 接收端按 SEQ 判断，重复帧只补 ACK、不重复执行（"重传"不等于"重做一次动作"） |
+| 兼容 | 不带 `#` 的行按老固件裸文本处理（`FRAME_LEGACY`），升级可以只做一头 |
+| 超长行 | payload > 63 / 行 > 512 字节：丢弃并重新同步，绝不越界 |
+| 边界 | `LinkFrame_Encode` 先判输出缓冲长度再写；解析先判字段长度再取值 |
 
 **STM32 -> 树莓派（事件上报）**
 
@@ -272,10 +388,12 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 |---|---|---|
 | `SPOTS:<n>` | 剩余车位数 | Spot_state.remaining_spots |
 | `SPOT:<id>:<0/1>` | 车位 id(1起) 状态，1=占用 | Spot_state.Parking_id + Parking_state(occupied/empty) |
+| `SPOT:<id>:FAULT` | 车位传感器故障 | Parking_state=fault + events.jsonl 记 sensor_fault（**不报成 empty**） |
 | `CARD:<8位HEX>` | 刷卡卡号(4字节) | Spot_state.card_id + vehicles.json 档案匹配记录（card_hit/card_unknown） |
 | `BARRIER:OPEN[:<reason>]` | 道闸打开（含远程命令应答）；reason=card/plate/remote | ParkingBarrier.barrier_state=up |
 | `BARRIER:CLOSE` | 道闸关闭（含远程命令应答）；**不带 reason** | ParkingBarrier.barrier_state=down |
 | `CAPTURE` | 车辆到达（红外触发），启动过闸会话并请求拍照识别 | 拍照->OCR->vehicles.json 匹配->命中自动 OPEN + 上报 PlateRecognition.plate_number |
+| `ACK:<HEX>` | 对下行帧的确认 | 收到后停止该 SEQ 的重传 |
 
 **树莓派 -> STM32（下行控制/结果）**
 
@@ -285,19 +403,25 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 | `PLATE:NONE` | 未识别到车牌 | OLED 第 4 行恢复占位 |
 | `OPEN[:<reason>]` | 云端 open_barrier 命令或车牌档案命中 | 抬杆，回发 BARRIER:OPEN:<reason> |
 | `CLOSE[:<reason>]` | 云端 close_barrier 命令或会话结束 | 落杆，回发 BARRIER:CLOSE |
+| `ACK:<HEX>` | 对上行帧的确认 | 停止重传 |
 
 **`:reason` 字段**
 
-`reason` 表示这次开闸是"凭什么开的"，取值 `card`（RFID 白名单）/ `plate`（车牌档案命中）/ `remote`（云端或网页端远程命令）。
+`reason` 表示这次开闸是"凭什么开的"。它是一个**白名单枚举**，不是自由文本：
+固件侧 `LinkReason`（CARD/PLATE/REMOTE）与树莓派侧 `passage.CREDENTIAL_*`
+取值必须一致，未知取值一律拒收。
 
+- 为什么必须是枚举：老实现把串口收到的 reason 直接 `sprintf` 进 32 字节缓冲，
+  而协议允许 63 字节 payload——发一条 `OPEN:` 接长串就能写穿栈。现在枚举 +
+  `snprintf`，越界在类型层面就不可能发生
 - 树莓派下发时带上原因，STM32 抬杆/落杆时原样回报，树莓派据此判定本次过闸的凭证并写入审计事件（`barrier_open` 带 credential/operator，未命中会话时写 `barrier_open_no_session`）
 - 老固件不带原因（形如裸 `BARRIER:OPEN`），树莓派用"最近 2s 内是否刷过卡 / 最近 5s 内是否下过远程命令"兜底判断；都判断不出则记 `unknown`
-- 关闸方向**故意不对称**：下行 `CLOSE:<reason>` 会带原因（树莓派一定知道是谁下的命令），但 STM32 回发的 `BARRIER:CLOSE` 不带——因为凭证判定只发生在"抬杆"这一刻，关闸只用来结束会话，多带一个字段没有用处
+- 关闸方向**故意不对称**：下行 `CLOSE:<reason>` 会带原因（树莓派一定知道是谁下的命令），但 STM32 回发的 `BARRIER:CLOSE` 不带——凭证判定只发生在"抬杆"这一刻，关闸只用来结束会话
 
 **云端命令**
 
 - 产品模型命令（服务 ParkingBarrier）：open_barrier / close_barrier / query_status
-- 树莓派收到命令后通过串口转发 OPEN/CLOSE 给 STM32，等待 BARRIER:OPEN/CLOSE 应答（5s 超时）后向云端回执 result=success/failed
+- 树莓派在 `command_worker` 线程里把 OPEN/CLOSE 转发给 STM32，等待 BARRIER:OPEN/CLOSE 应答（5s 超时）后向云端回执 result=success/failed
 - query_status 由树莓派根据已缓存状态直接应答（remaining_spots/plate_number/barrier_state）
 
 **触发方式**
@@ -310,20 +434,24 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 连接配置（`cloud_config.json`）：
 | 参数 | 值 |
 |---|---|
-| Broker | `53b674367f.st1.iotda-device.cn-south-1.myhuaweicloud.com:8883`（MQTTS） |
-| 设备 ID | `6a85594cc00ccb6d4b701321_raspberrypi-zeroWH` |
-| CA 证书 | `/etc/ssl/certs/ca-certificates.crt` |
+| Broker | `<实例ID>.st1.iotda-device.cn-south-1.myhuaweicloud.com:8883`（MQTTS，按实际实例填写） |
+| 设备 ID | `<产品ID>_<设备名>`（按实际设备填写） |
+| CA 证书 | `/etc/ssl/certs/ca-certificates.crt`（缺失即拒绝启动，不降级） |
+| 设备密码 | **不在配置文件里**：`PARKING_MQTT_PASSWORD` 环境变量或 `cloud_secret.json`（0600） |
 | 上报 Topic | `$oc/devices/{device_id}/sys/properties/report` |
 | 命令 Topic | `$oc/devices/{device_id}/sys/commands/#` |
 
 产品模型（`huawei_iotda_product_model.json`，已导入云端）：
 | 服务 | 属性 | 命令 |
 |---|---|---|
-| Spot_state | Parking_id(string)、Parking_state(empty/occupied)、remaining_spots(0-20)、card_id(string) | - |
+| Spot_state | Parking_id(string)、Parking_state(empty/occupied/**fault**)、remaining_spots(0-20)、card_id(string) | - |
 | ParkingBarrier | barrier_state(up/down/opening/closing) | open_barrier / close_barrier / query_status |
 | PlateRecognition | plate_number(string) | - |
 
 注意：`Parking_id` + `Parking_state` 为单值属性，多车位上报会互相覆盖影子；小程序用本地缓存增量更新兜底（需改产品模型时另行讨论）。
+
+注意：`Parking_state` 现在会多出一个 `fault` 取值（传感器故障）。云端产品模型若把该属性
+定义成枚举，需要把 `fault` 加进去，否则平台侧会拒收或截断这条上报。
 
 属性上报在树莓派侧走独立发布线程（`queue.Queue` + `publish_worker`）：串口线程只负责"解析 + 入队"，不再等待云端 `wait_for_publish`。队列满时丢弃最旧的一条并计数，保证本地链路不会被云端链路拖死（云端协议本身未变）。
 
@@ -337,18 +465,26 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
 #define MAX_SPOT_ID           20       // 最大车位 ID（spot_occupied 数组长度）
 #define MAX_CARD_ID_LENGTH    4        // 卡号字节数
 #define PARKING_THRESHOLD_CM  20       // 车位占用阈值(cm)，距离小于该值判占用
-#define FLASH_APP_LIMIT_ADDR  0x08007000u // 应用程序上限（文档性宏，见下）
+#define FLASH_APP_LIMIT_ADDR  0x0800F000u // 应用程序上限（文档性宏，见下）
 ```
 
 Flash 分区（64KB，1KB/页）：改分区表需同步 `fault_log.h` 与 Keil 的 IROM1 设置
 
 | 地址范围 | 用途 |
 |---|---|
-| `0x08000000` - `0x08006FFF` | 应用程序（不得越过 `0x08007000`，IROM1 已设为此范围） |
-| `0x08007000` - `0x080073FF` | RFID 刷卡白名单（`Hardware/flash_storage.c`） |
+| `0x08000000` - `0x0800EFFF` | 应用程序（不得越过 `0x0800F000`，IROM1 已设为此范围） |
+| `0x0800F000` - `0x0800F3FF` | RFID 刷卡白名单 A 槽（`Hardware/flash_storage.c`） |
+| `0x0800F400` - `0x0800F7FF` | RFID 刷卡白名单 B 槽（A/B 交替，掉电安全） |
 | `0x0800FC00` - `0x0800FFFF` | 故障记录（`System/fault_log.c`，下载范围之外，升级固件不会擦除） |
 
-白名单容量与存储地址在 `Hardware/flash_storage.h`：`MAX_WHITELIST_CARDS`、`FLASH_SECTOR_ADDR`、`CARD_ID_LENGTH`。
+白名单容量与存储地址在 `Hardware/flash_storage.h`：`MAX_WHITELIST_CARDS`、
+`FLASH_SLOT_A_ADDR` / `FLASH_SLOT_B_ADDR`（`FLASH_SECTOR_ADDR` 保留为 A 槽别名）、
+`CARD_ID_LENGTH`。
+
+> 掉电安全：`FlashStorage_WriteWhitelist()` 先擦**非活动槽**，逐字写入后**回读校验**，
+> 通过才写 commit 标志并切换活动槽。写一半掉电，另一个槽仍是完整的旧记录。
+> 记录头含 magic/version/seq/len/crc32，读取时校验不过就当空库处理（而不是把
+> 半写的垃圾当成卡号白名单）。
 
 > 原先的 `WIFI_ENABLE` 开关与华为云明文凭据已从固件中删除：ESP8266/MQTT 实现整体移除，云端连接统一由树莓派承担（理由见 4.2 分层说明）。
 
@@ -356,9 +492,10 @@ Flash 分区（64KB，1KB/页）：改分区表需同步 `fault_log.h` 与 Keil 
 
 ```c
 /* User/project_config.h */
-#define BARRIER_UP_DELAY_MS   3000     // 道闸抬起延时
-#define BARRIER_DOWN_DELAY_MS 1000     // 道闸落下延时
-#define ERROR_DISPLAY_DELAY_MS 3000    // 错误提示显示时长
+#define BARRIER_UP_DELAY_MS    3000   // 开闸保持时间
+#define BARRIER_MOVE_MS        1500   // 舵机从一端走到另一端的时间
+#define ERROR_DISPLAY_DELAY_MS 3000   // 错误提示显示时长
+#define WAIT_CARD_TIMEOUT_MS  30000   // 车辆到位后等刷卡的最长时间（超时回 IDLE）
 
 /* Hardware/watchdog.h */
 #define WATCHDOG_TIMEOUT_MS        4000u  // IWDG 溢出时间（须大于最长正常阻塞）
@@ -374,6 +511,15 @@ Flash 分区（64KB，1KB/页）：改分区表需同步 `fault_log.h` 与 Keil 
 #define PARKINGNODE_ENDPOINT           20   // 端点号
 #define PARKINGNODE_SPOT_NUM           1    // 当前车位号（每节点修改）
 #define PARKINGNODE_SEND_PERIODIC_MSG_TIMEOUT 100 // 上报周期(ms)，叠加随机抖动
+
+#define PARKINGNODE_ULTRASONIC_SAMPLES   5    // 单次测量采样点数（取中值）
+#define PARKINGNODE_ULTRASONIC_MIN_VALID 3    // 至少几个点有效才算一次成功
+#define PARKINGNODE_ULTRASONIC_MAX_CM    400  // 有效量程上限(cm)，超出判无效
+#define PARKINGNODE_ULTRASONIC_HYST_CM   2    // 状态翻转迟滞(cm)
+#define PARKINGNODE_ULTRASONIC_CONFIRM   3    // 连续几次一致才翻转占用状态
+
+#define ULTRA_RISE_TIMEOUT_ITERS 3000  // 等回波拉高的计数上限（有界等待）
+#define ULTRA_ECHO_TIMEOUT_ITERS 4000  // 等回波结束的计数上限
 ```
 
 ## 7. 编译与部署
@@ -383,11 +529,19 @@ Flash 分区（64KB，1KB/页）：改分区表需同步 `fault_log.h` 与 Keil 
 1. 打开 `ParkingNode.eww` 工作空间，选择 ParkingNode 工程
 2. 目标板类型 CC2530EB，编译生成 `.hex`
 3. TI Flash Programmer 下载；每块节点板修改 `PARKINGNODE_SPOT_NUM`，跳线决定协调器/节点角色
+4. 命令行构建（CI/脚本）：
+   `IarBuild.exe ParkingNode.ewp -build EndDeviceEB`（另有 `CoordinatorEB`/`RouterEB`），
+   退出码 0 = 成功；`-clean <cfg>` 可强制全量重编
+5. 当前构建状态：三个配置均 **0 error**；剩余 7 条 warning 全部来自厂商 SDK 的
+   `hal_lcd-ssd1331.c`（未使用变量 / 指针符号性），与本项目代码无关。
+   本项目源文件为 CRLF（IAR 的 `Pa050 non-native end of line` 就是 LF 触发的）
+6. 资源占用（EndDeviceEB，含 Z-Stack 协议栈）：CODE 125 020 B、XDATA 5 415 B、
+   IDATA 192 B、DATA 32 B、CONST 870 B；CC2530F256 为 256KB Flash / 8KB SRAM
 
 ### 7.2 STM32 网关（Keil）
 
 1. 打开 `Project.uvprojx`，Target 1（STM32F103C8），编译生成 `.axf`
-2. ST-Link/J-Link 下载。注意 IROM1 只覆盖 `0x08000000`-`0x08006FFF`，**下载固件不会擦除白名单扇区与故障记录页**
+2. ST-Link/J-Link 下载。注意 IROM1 只覆盖 `0x08000000`-`0x0800EFFF`，**下载固件不会擦除白名单扇区与故障记录页**
 3. 无人值守（CI/脚本）构建：`UV4.exe -b Project.uvprojx -j0 -o build.log`，退出码 0=无警告、1=有警告、2=有错误
 4. `UV4.exe` 被占用时可用命令行语法检查：
    `arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -DSTM32F10X_MD -DUSE_STDPERIPH_DRIVER -I Start -I Library -I User -I Hardware -I System -fsyntax-only <file>`
@@ -405,7 +559,17 @@ sudo mkdir -p /opt/parking && sudo cp -r raspberrypi /opt/parking/
 
 # 建 venv、写 unit、开机自启
 sudo /opt/parking/raspberrypi/deploy/install.sh /opt/parking pi
+
+# 设备密钥：二选一，不要写进 cloud_config.json（该文件进版本库）
+#   a) 环境变量（写进 unit 的 Environment=，注意 unit 文件本身也要 chmod 600）
+#   b) 独立文件
+sudo sh -c 'printf "{\"password\": \"%s\"}\n" "<设备密钥>" > /opt/parking/raspberrypi/cloud_secret.json'
+sudo chmod 600 /opt/parking/raspberrypi/cloud_secret.json
+sudo chown pi:pi /opt/parking/raspberrypi/cloud_secret.json
 ```
+
+> 密钥缺失时网关**直接启动失败**并说明原因（不是带着空密码连云端）。
+> 这一条是刻意的：静默失败会让人以为"设备在线只是没数据"。
 
 装机后由 `plate-gateway.service` 托管：`Restart=always` / `RestartSec=2` / `StartLimitBurst=5`、日志进 journald、`MemoryMax=256M`（Pi Zero 512MB）。
 
@@ -428,8 +592,11 @@ BK=~/parking_gateway_backup_$(date +%Y%m%d_%H%M); mkdir -p $BK
 cp -a ~/parking_gateway/*.py ~/parking_gateway/*.json $BK/
 
 # 2) 本机上传（Windows 侧）
-#    pscp -pw <密码> raspberrypi\*.py raspberrypi\cloud_config.json zny@<IP>:/home/zny/parking_gateway/
-#    pscp -pw <密码> -r raspberrypi\tests raspberrypi\deploy zny@<IP>:/home/zny/parking_gateway/
+#    pscp -pw <密码> raspberrypi\*.py <user>@<IP>:/home/<user>/parking_gateway/
+#    （cloud_config.json / vehicles.json / cloud_secret.json 是设备本地配置，
+#      仓库里的是模板，不要回传覆盖）
+#    pscp -pw <密码> -r raspberrypi\tests raspberrypi\deploy <user>@<IP>:/home/<user>/parking_gateway/
+#    （也不要覆盖 cloud_secret.json —— 密钥只存在设备上，从不经版本库流转）
 #    （不要覆盖 vehicles.json —— 那是设备上的实际车辆档案）
 
 # 3) 清掉 Windows 带过去的 .pyc，避免路径/mtime 不一致
@@ -439,22 +606,30 @@ rm -rf ~/parking_gateway/__pycache__ ~/parking_gateway/tests/__pycache__
 sudo systemctl daemon-reload && sudo systemctl restart plate-gateway
 ```
 
-树莓派侧的实际路径与 repo 里的默认值不同，sed 替换的是：`User/Group=zny`、`WorkingDirectory=ExecStart` 用 `/home/zny/parking_gateway`、venv 解释器用 `/home/zny/parking_gateway/.venv/bin/python3`、`ReadWritePaths=/home/zny/parking_gateway /tmp`。
+树莓派侧的实际路径与 repo 里的默认值不同，sed 替换的是：`User/Group=<user>`、`WorkingDirectory=ExecStart` 用 `/home/<user>/parking_gateway`、venv 解释器用 `/home/<user>/parking_gateway/.venv/bin/python3`、`ReadWritePaths=/home/<user>/parking_gateway /tmp`。
 
 部署自检（不依赖相机）：
 
 ```bash
-cd ~/parking_gateway && .venv/bin/python3 -m unittest discover -s tests -t .   # 69 项
+cd ~/parking_gateway && .venv/bin/python3 -m unittest discover -s tests -t .   # 123 项
 sudo -n ls -l /proc/$(pgrep -f plate_gateway.py)/fd | grep ttyS0               # 串口已打开
 ss -tnp | grep 8883                                                            # MQTTS 已连上
 journalctl -u plate-gateway -n 20 -o cat
+```
+
+**提交前自检**
+
+```bash
+python tools/check_secrets.py            # 扫全仓库：明文密码 / 私钥 / AccessKey
+python tools/check_secrets.py --staged   # 只看暂存区，可挂成 pre-commit 钩子
+python -m unittest discover -s raspberrypi/tests -t raspberrypi   # 123 项
 ```
 
 **开发时前台运行**（调试用，不装服务）
 
 ```bash
 cd raspberrypi && source ../.venv/bin/activate && python3 plate_gateway.py
-python -m unittest discover -s tests -t .   # 单元测试（69 项，无需相机/串口/网络）
+python -m unittest discover -s tests -t .   # 单元测试（123 项，无需相机/串口/网络）
 ```
 
 SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | base64 -d | bash`
@@ -474,6 +649,12 @@ SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | 
 | 可靠性 | IWDG 看门狗（4s 超时自复位）+ 故障现场记录到 Flash 并在开机打印；寄存器等待循环均带超时 |
 | 现场运维 | 树莓派服务化（systemd 自启 + 崩溃重启 + journald 日志），串口线程与云端发布解耦 |
 | 可审计 | 每次开闸记录凭证来源（card/plate/remote）与会话 TTL，区分刷卡、识别、远程开闸 |
+| 链路完整性 | 串口帧带 CRC-8 + 序号 + ACK + 重传，坏帧丢弃、重复帧不重做；裸文本仍兼容 |
+| 抗干扰 | 超声波 5 点中值 + 2cm 迟滞 + 3 次确认；回波超时上报 `FAULT` 而不是"空位" |
+| 掉电安全 | 白名单 A/B 双槽 + CRC + commit 标志；写一半掉电不会丢整库，也不再内置默认卡 |
+| 安全联锁 | 落杆前查防砸红外，故障态保持开闸；限位/电流检测接口已预留 |
+| 可观测 | ISR 耗时用 DWT 周期计数器实测；串口收发/丢帧/重传均有计数器 |
+| 凭据管理 | 密码走环境变量或 0600 独立文件，CA 缺失拒绝启动，配置文件里只有"连哪里" |
 
 ## 9. 注意事项
 
@@ -486,4 +667,16 @@ SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | 
 7. **影子覆盖**：多车位 `Parking_id`/`Parking_state` 单值属性互相覆盖，需要时再改产品模型（每车位一属性或 json 全量快照）
 8. **车辆档案**：`vehicles.json` 为车卡统一档案（plate + cards），STM32 Flash 白名单为离线刷卡兜底，新增车辆/卡片时两处需同步
 9. **看门狗副作用**：`WATCHDOG_TIMEOUT_MS`（4s）必须大于最长的正常阻塞（错误提示 3s），后续若加更长的阻塞流程需同步调大，否则会被 IWDG 复位
-10. **已知遗留（凭据）**：`raspberrypi/cloud_config.json` 目前以明文保存华为云设备密钥且已入库，`plate_gateway.py` 在找不到 CA 证书时会退化为 `CERT_NONE`。正式启用建议改为环境变量/独立配置文件（加入 `.gitignore`）并在云端轮换密钥，同时把 CA 缺失视为启动失败。
+10. **凭据**：密码已从 `cloud_config.json` 移除，改为 `PARKING_MQTT_PASSWORD` 环境变量或
+    `cloud_secret.json`（0600，已 gitignore）；CA 证书缺失时直接拒绝启动，不再退化为
+    `CERT_NONE`。**注意：本仓库的历史提交里出现过明文密码**，如果仓库要公开，请在华为云
+    轮换设备密钥，并用 `git filter-repo` 清理历史——删掉文件不等于删掉历史。
+11. **协议要成对升级**：帧协议 VER=1，固件与树莓派必须同步更新。只升一头时，新端会拒收
+    旧版本帧（旧端发裸文本时新端仍兼容），排障第一步先确认两端的协议版本。
+12. **白名单分区迁移**：老固件白名单在 `0x08007000`，新固件首次启动会一次性迁移到 A 槽。
+    迁移后若回滚到老固件，老固件会看到空库（老地址不再更新）——回滚前先备份白名单。
+13. **传感器故障上报**：`SPOT:<id>:FAULT` → 云端 `Parking_state=fault`，需要产品模型
+    把 `fault` 加进枚举，否则平台侧会丢弃这条属性。
+14. **执行机构是原型件**：SG90 舵机没有限位开关、没有电机电流检测、没有防砸冗余。
+    `barrier.c` 已把安全策略和接口留好（`BARRIER_HAS_LIMIT_SWITCHES` /
+    `BARRIER_HAS_CURRENT_SENSE`），换真实道闸时必须补齐这几路信号再上线。

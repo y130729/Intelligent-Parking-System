@@ -19,10 +19,17 @@ static RingBuffer serial_rx_ring;
 extern uint8_t spot_occupied[MAX_SPOTS];
 extern uint8_t ultrasonic_new_data_flag;
 
-// 用于延迟MQTT上报的变量
-uint8_t pending_spot_id = 0;
-uint8_t pending_spot_status = 0;
-uint8_t pending_spot_update = 0;
+/* 车位变化"脏位图"。
+ *
+ * 原来是 pending_spot_id/status/update 三个变量凑成的"单槽"：
+ * 同一轮里多个节点都变化时，后写的会把前面的覆盖掉，只剩一条上报。
+ * 改成位图后，每个车位一位，天然按车位合并（同一车位多次变化只报最终态），
+ * 又不会丢别的车位。20 个车位用一个 uint32_t 就够。
+ *
+ * 这些变量只在主循环上下文读写（ISR 只往环形缓冲写字节），
+ * 因此不需要关中断保护。 */
+volatile uint32_t spot_dirty_mask = 0;
+uint8_t spot_fault[MAX_SPOTS] = {0};
 
 /**
   * 函    数：串口初始化 - USART3连接CC2530协调器
@@ -178,65 +185,97 @@ void USART3_IRQHandler(void)
 	}
 }
 
+/* 解析无符号十进制数，返回解析到的字符指针；失败返回 NULL。 */
+static const char *parse_u16(const char *s, uint16_t *out)
+{
+	uint32_t v = 0;
+	uint8_t digits = 0;
+
+	while (*s >= '0' && *s <= '9')
+	{
+		v = v * 10 + (uint32_t)(*s - '0');
+		if (v > 65535) return NULL;
+		s++;
+		digits++;
+	}
+	if (digits == 0) return NULL;
+	*out = (uint16_t)v;
+	return s;
+}
+
 /**
-  * 函    数：解析一行CC2530超声波数据
-  * 参    数：line 一行数据，格式 "PX:XXXcm"
+  * 函    数：解析一行 CC2530 数据
+  * 参    数：line 以 '\0' 结尾的一行，格式 "PXX:XXXcm" / "PXX:FAULT"
   * 返 回 值：无
+  *
+  * 注意：所有下标访问前都先确认长度。原来直接访问 line[3]，
+  * 短行（例如只收到 "P0"）会读到缓冲区里的残留数据。
   */
 static void Serial_HandleLine(uint8_t *line)
 {
-	uint8_t spot_id = 0;
-	uint16_t distance = 0;
+	const char *p = (const char *)line;
+	uint8_t  spot_id = 0;
+	uint16_t spot_value = 0;
+	const char *rest;
 
-	// 解析带车位号的格式: "PX:XXXcm"
-	if (line[0] == 'P' && line[3] == ':')
+	if (p == NULL) return;
+	if (strlen(p) < 5) return;     /* 最短合法的是 "P1:23cm" */
+	if (p[0] != 'P') return;
+
+	rest = parse_u16(&p[1], &spot_value);
+	if (rest == NULL) return;
+	if (spot_value == 0 || spot_value > MAX_SPOTS) return;
+	spot_id = (uint8_t)spot_value;
+	if (*rest != ':') return;
+	if (spot_id == 0 || spot_id > MAX_SPOTS) return;
+	rest++;
+
 	{
-		// 解析车位号 (1-2位)
-		if (line[1] >= '0' && line[1] <= '9')
+		uint8_t  index = (uint8_t)(spot_id - 1);
+		uint16_t value;
+
+		/* 传感器故障：单独一路，绝不能当成"距离=0 -> 空位" */
+		if (strcmp(rest, "FAULT") == 0)
 		{
-			spot_id = (line[1] - '0') * 10;
-			if (line[2] >= '0' && line[2] <= '9')
+			if (!spot_fault[index])
 			{
-				spot_id += (line[2] - '0');
+				spot_fault[index] = 1;
+				spot_dirty_mask |= (1UL << index);
+				ultrasonic_new_data_flag = 1;
+				USART_Printf("Spot %d sensor FAULT\r\n", spot_id);
 			}
-			else if (line[2] == ':')
-			{
-				spot_id = (line[1] - '0');
-			}
+			return;
 		}
 
-		if (spot_id > 0 && spot_id <= MAX_SPOTS)
-		{
-			// 解析距离 (格式: XXXcm)
-			if (sscanf((char*)&line[4], "%hucm", &distance) == 1)
-			{
-				uint8_t spot_index = spot_id - 1;
-				uint8_t prev_state = spot_occupied[spot_index];
-				spot_occupied[spot_index] = (distance < PARKING_THRESHOLD_CM) ? 1 : 0;
+		rest = parse_u16(rest, &value);
+		if (rest == NULL) return;
+		if (strcmp(rest, "cm") != 0) return;
 
-				if (spot_occupied[spot_index] != prev_state)
-				{
-					ultrasonic_new_data_flag = 1;
-					if (spot_occupied[spot_index])
-					{
-						USART_Printf("Spot %d occupied (distance: %dcm)\r\n", spot_id, distance);
-					}
-					else
-					{
-						USART_Printf("Spot %d free (distance: %dcm)\r\n", spot_id, distance);
-					}
-					// 设置标志位，由主循环 ProcessPendingSpotUpdate() 上报
-					pending_spot_id = spot_id;
-					pending_spot_status = spot_occupied[spot_index];
-					pending_spot_update = 1;
-				}
+		if (spot_fault[index])
+		{
+			spot_fault[index] = 0;
+			spot_dirty_mask |= (1UL << index);
+		}
+
+		{
+			uint8_t prev_state = spot_occupied[index];
+			spot_occupied[index] = (value < PARKING_THRESHOLD_CM) ? 1 : 0;
+
+			if (spot_occupied[index] != prev_state)
+			{
+				ultrasonic_new_data_flag = 1;
+				spot_dirty_mask |= (1UL << index);
+				USART_Printf("Spot %d %s (distance: %dcm)\r\n",
+				             spot_id,
+				             spot_occupied[index] ? "occupied" : "free",
+				             value);
 			}
 		}
 	}
 }
 
 /**
-  * 函    数：主循环调用，从环形缓冲取字节并按行处理CC2530数据
+  * 函    数：主循环调用，从环形缓冲取字节并按行处理 CC2530 数据
   * 参    数：无
   * 返 回 值：无
   */
@@ -244,18 +283,24 @@ void Serial_Process(void)
 {
 	static uint8_t line[SERIAL_RX_LINE_SIZE];
 	static uint8_t line_len = 0;
+	static uint8_t discarding = 0;
 	uint8_t ch;
 
 	while (RingBuf_Read(&serial_rx_ring, &ch))
 	{
 		if (ch == '\n' || ch == '\r')
 		{
-			if (line_len > 0)
+			if (line_len > 0 && !discarding)
 			{
 				line[line_len] = '\0';
 				Serial_HandleLine(line);
-				line_len = 0;
 			}
+			line_len = 0;
+			discarding = 0;
+		}
+		else if (discarding)
+		{
+			/* 超长行：丢到行尾再重新同步 */
 		}
 		else if (line_len < SERIAL_RX_LINE_SIZE - 1)
 		{
@@ -263,7 +308,7 @@ void Serial_Process(void)
 		}
 		else
 		{
-			/* 单行超长：丢弃该行，等待行结束重新同步 */
+			discarding = 1;
 			line_len = 0;
 		}
 	}

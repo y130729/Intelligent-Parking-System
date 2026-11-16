@@ -1,5 +1,7 @@
 #include "USART.h"
 #include "ring_buffer.h"
+#include "uart_tx.h"
+#include "system_tick.h"
 #include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
@@ -9,7 +11,15 @@
 #include "misc.h"
 #include "flash_storage.h"
 
-static char usart_buffer[1024];
+/* printf 缓冲：原来 1024 字节，而 STM32F103C8 只有 20KB RAM，
+   同时它还是不可重入的（中断里再 printf 会踩同一块缓冲）。
+   现在只保留 160 字节，并且输出走队列，不再是"格式化完再阻塞发送"。 */
+static char usart_buffer[160];
+
+/* 调试串口发送队列：TXE 中断按 87us/字节 的节奏出队 */
+#define USART_TX_RING_SIZE  512
+static uint8_t usart_tx_buf[USART_TX_RING_SIZE];
+static UartTx  usart_tx;
 
 /* 调试命令环形缓冲（2 的幂）：ISR 写入，主循环 USART_Process() 取行处理 */
 #define USART_RX_RING_SIZE  256
@@ -44,6 +54,7 @@ void USART_Init_Config(void)
     USART_Init(DEBUG_USARTx, &USART_InitStructure);
 
     USART_ITConfig(DEBUG_USARTx, USART_IT_RXNE, ENABLE);
+    USART_ITConfig(DEBUG_USARTx, USART_IT_TXE, DISABLE);
 
     NVIC_InitStructure.NVIC_IRQChannel = DEBUG_USART_IRQ;
     NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
@@ -53,8 +64,10 @@ void USART_Init_Config(void)
 
     USART_Cmd(DEBUG_USARTx, ENABLE);
     RingBuf_Init(&usart_rx_ring, usart_rx_ring_buf, USART_RX_RING_SIZE);
+    UartTx_Init(&usart_tx, DEBUG_USARTx, usart_tx_buf, USART_TX_RING_SIZE);
 }
 
+/* 阻塞发送一个字节：保留给"队列还没起来"的极早期调试和异常路径 */
 void USART_SendByte(uint8_t byte)
 {
     while(USART_GetFlagStatus(DEBUG_USARTx, USART_FLAG_TXE) == RESET);
@@ -63,10 +76,8 @@ void USART_SendByte(uint8_t byte)
 
 void USART_SendString(char *str)
 {
-    while(*str)
-    {
-        USART_SendByte(*str++);
-    }
+    if (str == NULL) return;
+    UartTx_PutString(&usart_tx, str);
 }
 
 void USART_Printf(const char *format, ...)
@@ -75,28 +86,44 @@ void USART_Printf(const char *format, ...)
     va_start(args, format);
     vsnprintf(usart_buffer, sizeof(usart_buffer), format, args);
     va_end(args);
-    USART_SendString(usart_buffer);
+    UartTx_PutString(&usart_tx, usart_buffer);
+}
+
+void USART_Flush(uint32_t timeout_ms)
+{
+    UartTx_Flush(&usart_tx, timeout_ms);
+}
+
+uint16_t USART_TxDropped(void)
+{
+    return usart_tx.dropped;
 }
 
 int fputc(int ch, FILE *f)
 {
-    USART_SendData(DEBUG_USARTx, (uint8_t)ch);
-    while(USART_GetFlagStatus(DEBUG_USARTx, USART_FLAG_TXE) == RESET);
+    (void)f;
+    {
+        uint8_t b = (uint8_t)ch;
+        UartTx_PutBytes(&usart_tx, &b, 1);
+    }
     return ch;
 }
 
-/* USART1 RX interrupt: 只把收到的字节写入环形缓冲，
-   行提取与命令处理由主循环 USART_Process() 完成。 */
+/* USART1 中断：RX 入环形缓冲，TX 由 UartTx 的 TXE 状态机出队。 */
 void USART1_IRQHandler(void)
 {
-    if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+    if(USART_GetITStatus(DEBUG_USARTx, USART_IT_RXNE) != RESET)
     {
-        uint8_t ch = USART_ReceiveData(USART1);
+        uint8_t ch = (uint8_t)USART_ReceiveData(DEBUG_USARTx);
         RingBuf_Write(&usart_rx_ring, ch);
+    }
+    if(USART_GetITStatus(DEBUG_USARTx, USART_IT_TXE) != RESET)
+    {
+        UartTx_OnTxE(&usart_tx);
     }
 }
 
-/* 处理一条调试命令（addcard/delcard/listcards）。 */
+/* 处理一条调试命令（addcard/delcard/listcards/provision）。 */
 static void USART_HandleCommand(char *command)
 {
     /* sscanf 的 %X 目标必须是 unsigned int*，直接传 uint8_t* 会多写 3 字节，
@@ -139,6 +166,13 @@ static void USART_HandleCommand(char *command)
     {
         FlashStorage_PrintWhitelist();
     }
+    else if (strcmp(command, "erasedb") == 0)
+    {
+        /* 产测/换车：清空白名单。不再有"内置默认卡"后门，
+           空库就是空库，必须显式写入。 */
+        FlashStorage_EraseAll();
+        USART_Printf("Whitelist erased. Use addcard to provision.\r\n");
+    }
     else
     {
         USART_Printf("Unknown command: %s\r\n", command);
@@ -146,6 +180,7 @@ static void USART_HandleCommand(char *command)
         USART_Printf("  addcard AABBCCDD  - Add a card to whitelist\r\n");
         USART_Printf("  delcard AABBCCDD  - Remove a card from whitelist\r\n");
         USART_Printf("  listcards         - List all cards in whitelist\r\n");
+        USART_Printf("  erasedb           - Erase whitelist (production)\r\n");
     }
 }
 
@@ -154,18 +189,24 @@ void USART_Process(void)
 {
     static char line[USART_RX_LINE_SIZE];
     static uint16_t line_len = 0;
+    static uint8_t discarding = 0;
     uint8_t ch;
 
     while (RingBuf_Read(&usart_rx_ring, &ch))
     {
         if (ch == '\r' || ch == '\n')
         {
-            if (line_len > 0)
+            if (line_len > 0 && !discarding)
             {
                 line[line_len] = '\0';
                 USART_HandleCommand(line);
-                line_len = 0;
             }
+            line_len = 0;
+            discarding = 0;
+        }
+        else if (discarding)
+        {
+            /* 超长行：丢弃到行尾重新同步 */
         }
         else if (line_len < USART_RX_LINE_SIZE - 1)
         {
@@ -173,7 +214,7 @@ void USART_Process(void)
         }
         else
         {
-            /* 单行超长：丢弃该行，等待行结束重新同步 */
+            discarding = 1;
             line_len = 0;
         }
     }

@@ -52,16 +52,18 @@ void Servo_SetAngle(uint16_t angle)
     TIM_SetCompare2(SERVO_TIM, pulse);
 }
 
+/* 只设角度、不等待。
+   原来这里 delay_ms(1500)，等于每次抬/落杆把整个主循环停 1.5 秒：
+   串口不读、红外不计、看门狗要靠 delay_ms 内部特殊处理才不误复位。
+   行程时间改由状态机的 STATE_OPENING / STATE_CLOSING 截止时间表达。 */
 void Servo_Up(void)
 {
     Servo_SetAngle(SERVO_BARRIER_UP_ANGLE);
-    delay_ms(1500);
 }
 
 void Servo_Down(void)
 {
     Servo_SetAngle(SERVO_BARRIER_DOWN_ANGLE);
-    delay_ms(1500);
 }
 
 // 非阻塞版本：只设置角度，不等待

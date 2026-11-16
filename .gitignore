@@ -34,3 +34,7 @@ Thumbs.db
 *.uvguix.*
 # ---- runtime logs ----
 events.jsonl
+# ---- device secrets (never commit) ----
+cloud_secret.json
+*.pem
+*.key

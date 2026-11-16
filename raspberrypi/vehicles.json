@@ -1,20 +1,20 @@
 [
   {
-    "plate": "冀T234J5",
-    "cards": ["7506D506"],
-    "owner": "张三",
+    "plate": "京A00001",
+    "cards": ["A1B2C3D4"],
+    "owner": "示例车主A",
     "type": "fixed"
   },
   {
-    "plate": "鄂EM456U",
+    "plate": "沪B00002",
     "cards": [],
-    "owner": "李四",
+    "owner": "示例车主B",
     "type": "fixed"
   },
   {
-    "plate": "湘K4Z567",
+    "plate": "粤C00003",
     "cards": [],
-    "owner": "王五",
+    "owner": "示例车主C",
     "type": "fixed"
   }
 ]

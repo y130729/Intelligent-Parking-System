@@ -22,5 +22,7 @@ void USART_SendByte(uint8_t byte);
 void USART_SendString(char *str);
 void USART_Printf(const char *format, ...);
 void USART_Process(void);
+void USART_Flush(uint32_t timeout_ms);
+uint16_t USART_TxDropped(void);
 
 #endif /* __USART_H */

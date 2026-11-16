@@ -3,7 +3,7 @@
 """Patch plate_recognition.py on the Pi to add plate-DB matching."""
 import io
 
-path = "/home/zny/parking_gateway/plate_recognition.py"
+path = "/home/<user>/parking_gateway/plate_recognition.py"
 src = io.open(path, encoding="utf-8").read()
 
 # 1) add import after the first import line

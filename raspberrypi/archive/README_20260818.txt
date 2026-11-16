@@ -1,5 +1,5 @@
 ﻿车牌识别程序备份 (2026-08-18)
-来源: 树莓派 Zero WH (10.172.83.46) ~/parking_gateway
+来源: 树莓派 Zero WH <IP> ~/parking_gateway
 
 文件:
   plate_recognition.py  图片文件车牌识别 (带参数, 详见脚本头部注释)
