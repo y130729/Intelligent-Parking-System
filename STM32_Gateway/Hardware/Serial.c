@@ -3,18 +3,72 @@
 #include <stdarg.h>
 #include <string.h>
 #include "USART.h"
-#include "ring_buffer.h"
 
 #define PARKING_THRESHOLD_CM 20
 #define MAX_SPOTS 20
 
-/* 环形缓冲容量（2 的幂）：缓存 CC2530 发送的整行数据，
-   避免主循环繁忙时单行缓冲被覆盖。 */
-#define SERIAL_RX_RING_SIZE  64
-#define SERIAL_RX_LINE_SIZE  32
+/* USART3 接收走 DMA 环形缓冲，不再用 RXNE 中断。
+ *
+ * 为什么必须换：加卡时要擦 1KB Flash 页。F103 在擦除期间**不能从 Flash 取指**，
+ * CPU 整个停住 20~40ms（115200 下等于 230~460 字节）。原来 64 字节的环形
+ * 缓冲 5.5ms 就满，于是一次"加卡"必然丢一帧车位上报——而且丢的是哪一帧
+ * 取决于谁在那一刻上报，排查时极难复现。
+ * DMA 是独立总线主设备，不取指、不依赖 CPU，擦除期间照样把字节写进 SRAM。
+ *
+ * 容量换算（115200-N-8-1 ≈ 11.5KB/s，即 1 字节 / 87us）：
+ *   - 单槽白名单提交：擦 1 页 20~40ms + 写 27 个字 ≈ 45ms 最坏 -> 约 520 字节；
+ *   - FlashStorage_EraseAll()：连擦 A/B 两页 40~80ms -> 约 920 字节；
+ *   再叠加"多节点入网/重连后集中上报"的突发，1KB 只剩 1.1 倍余量，太紧。
+ *   取 2KB = 满速 178ms，覆盖两页擦除最坏值仍有 2 倍余量。
+ *   代价是 2KB SRAM（F103C8 共 20KB，本工程 RAM 占用约 7KB，可接受）。 */
+#define SERIAL_RX_DMA_SIZE    2048
+#define SERIAL_RX_DMA_CHANNEL DMA1_Channel3      /* F103: USART3_RX = DMA1_CH3 */
+#define SERIAL_RX_LINE_SIZE   32
 
-static uint8_t serial_rx_ring_buf[SERIAL_RX_RING_SIZE];
-static RingBuffer serial_rx_ring;
+static uint8_t  serial_rx_buf[SERIAL_RX_DMA_SIZE];
+static uint16_t serial_rx_tail = 0;
+
+/* DMA 写指针（0..SIZE-1）：CNDTR 在循环模式下从 SIZE 递减到 0 再重装 */
+static uint16_t serial_rx_write_pos(void)
+{
+	uint16_t remain = DMA_GetCurrDataCounter(SERIAL_RX_DMA_CHANNEL);
+	return (uint16_t)((SERIAL_RX_DMA_SIZE - remain) % SERIAL_RX_DMA_SIZE);
+}
+
+/* 取一个已收到的字节；没有新数据返回 0。
+ * 注意：环形 DMA 无法精确统计"被覆盖"的字节数（没有回绕中断可依赖），
+ * 所以这里只保证"不读到半截数据"，容量靠上面的换算留足。 */
+static uint8_t serial_rx_read(uint8_t *ch)
+{
+	uint16_t head = serial_rx_write_pos();
+
+	if (head == serial_rx_tail) return 0;
+	*ch = serial_rx_buf[serial_rx_tail];
+	serial_rx_tail = (uint16_t)((serial_rx_tail + 1u) % SERIAL_RX_DMA_SIZE);
+	return 1;
+}
+
+static void serial_rx_dma_init(void)
+{
+	DMA_InitTypeDef dma;
+
+	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+
+	DMA_DeInit(SERIAL_RX_DMA_CHANNEL);
+	dma.DMA_PeripheralBaseAddr = (uint32_t)&USART3->DR;
+	dma.DMA_MemoryBaseAddr     = (uint32_t)serial_rx_buf;
+	dma.DMA_DIR                = DMA_DIR_PeripheralSRC;
+	dma.DMA_BufferSize         = SERIAL_RX_DMA_SIZE;
+	dma.DMA_PeripheralInc      = DMA_PeripheralInc_Disable;
+	dma.DMA_MemoryInc          = DMA_MemoryInc_Enable;
+	dma.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
+	dma.DMA_MemoryDataSize     = DMA_MemoryDataSize_Byte;
+	dma.DMA_Mode               = DMA_Mode_Circular;
+	dma.DMA_Priority           = DMA_Priority_High;
+	dma.DMA_M2M                = DMA_M2M_Disable;
+	DMA_Init(SERIAL_RX_DMA_CHANNEL, &dma);
+	DMA_Cmd(SERIAL_RX_DMA_CHANNEL, ENABLE);
+}
 
 extern uint8_t spot_occupied[MAX_SPOTS];
 extern uint8_t ultrasonic_new_data_flag;
@@ -64,20 +118,12 @@ void Serial_Init(void)
 	USART_InitStructure.USART_WordLength = USART_WordLength_8b;		//字长，选择8位
 	USART_Init(USART3, &USART_InitStructure);				//将结构体变量交给USART_Init，配置USART3
 	
-	/*中断输出配置*/
-	USART_ITConfig(USART3, USART_IT_RXNE, ENABLE);
-	
-	/*NVIC配置*/
-	NVIC_InitTypeDef NVIC_InitStructure;					//定义结构体变量
-	NVIC_InitStructure.NVIC_IRQChannel = USART3_IRQn;		//选择配置NVIC的USART3线
-	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;			//指定NVIC线路使能
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;		//指定NVIC线路的抢占优先级为1
-	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;		//指定NVIC线路的响应优先级为1
-	NVIC_Init(&NVIC_InitStructure);							//将结构体变量交给NVIC_Init，配置NVIC外设
+	/*接收配置：DMA 循环搬进 SRAM，CPU 忙（例如擦 Flash）时也不丢字节*/
+	serial_rx_dma_init();
+	USART_DMACmd(USART3, USART_DMAReq_Rx, ENABLE);
 	
 	/*USART使能*/
 	USART_Cmd(USART3, ENABLE);								//使能USART3，串口开始运行
-	RingBuf_Init(&serial_rx_ring, serial_rx_ring_buf, SERIAL_RX_RING_SIZE);
 	
 	USART_Printf("CC2530 UART initialized (USART3)\r\n");
 }
@@ -166,23 +212,6 @@ void Serial_Printf(char *format, ...)
 	vsprintf(String, format, arg);	//使用vsprintf打印格式化字符串和参数列表到字符数组中
 	va_end(arg);					//结束变量arg
 	Serial_SendString(String);		//串口发送字符数组（字符串）
-}
-
-/**
-  * 函    数：USART3中断函数 - 只接收字节写入环形缓冲
-  * 参    数：无
-  * 返 回 值：无
-  * 注意事项：此函数为中断函数，无需调用，中断触发后自动执行
-  *           行解析由主循环 Serial_Process() 完成
-  */
-void USART3_IRQHandler(void)
-{
-	if (USART_GetITStatus(USART3, USART_IT_RXNE) == SET)	//判断是否是USART3的接收事件触发的中断
-	{
-		uint8_t RxData = USART_ReceiveData(USART3);			//读取CC2530发送的数据
-		RingBuf_Write(&serial_rx_ring, RxData);
-		USART_ClearITPendingBit(USART3, USART_IT_RXNE);		//清除标志位
-	}
 }
 
 /* 解析无符号十进制数，返回解析到的字符指针；失败返回 NULL。 */
@@ -286,7 +315,7 @@ void Serial_Process(void)
 	static uint8_t discarding = 0;
 	uint8_t ch;
 
-	while (RingBuf_Read(&serial_rx_ring, &ch))
+	while (serial_rx_read(&ch))
 	{
 		if (ch == '\n' || ch == '\r')
 		{

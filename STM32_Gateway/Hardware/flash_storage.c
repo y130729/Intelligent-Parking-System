@@ -51,6 +51,8 @@ static uint32_t crc32_bytes(const uint8_t *p, uint32_t n)
 
 /* --- 底层读写 ------------------------------------------------------ */
 
+/* 注意：调用前必须已经 FLASH_Unlock()，并且清过 FLASH_FLAG_PGERR/WRPRTERR。
+   F1 复位后 FLASH_CR 是锁定的，不 Unlock 时 ProgramWord/ErasePage 一律失败。 */
 static uint8_t program_words(uint32_t addr, const void *data, uint32_t len)
 {
     const uint32_t *src = (const uint32_t *)data;
@@ -192,10 +194,17 @@ void FlashStorage_WriteWhitelist(CardWhitelist *wl)
     memcpy(wl_write_buf, wl, WL_PAYLOAD_LEN);
     crc = crc32_bytes(wl_write_buf, WL_PAYLOAD_LEN);
 
+    /* F1 上 FLASH_CR 复位后是锁定的：不先 Unlock，擦除和编程全部静默失败
+       （表现为"verify failed"，看起来像 Flash 坏了，其实是没解锁）。
+       同时清掉上一次操作可能残留的 EOP/PGERR/WRPRTERR——只要挂着一个错误位，
+       后续每一次操作都会立刻返回错误，这是"失败一次之后就再也写不进去"的原因。 */
+    FLASH_Unlock();
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR);
+
     if (FLASH_ErasePage(target) != FLASH_COMPLETE)
     {
         USART_Printf("FlashStorage: erase failed, keep old whitelist\r\n");
-        return;
+        goto out;
     }
 
     hdr.magic = WL_MAGIC;
@@ -203,17 +212,21 @@ void FlashStorage_WriteWhitelist(CardWhitelist *wl)
     hdr.seq = whitelist_seq + 1u;
     hdr.payload_len = WL_PAYLOAD_LEN;
     hdr.crc = crc;
-    hdr.commit = 0;                 /* 先不提交 */
+    /* 提交标志必须留成"擦除态" 0xFFFFFFFF。
+       F1 的 Flash 编程只能把 1 写成 0，不能把 0 写回 1：如果这里先写 0，
+       后面再写 WL_COMMIT（'COMT'）会触发 PGERR，commit 永远失败——
+       表现为"每次加卡都提示 commit failed / 重启后卡就没了"。 */
+    hdr.commit = 0xFFFFFFFFu;       /* 先不提交 */
 
     if (!program_words(target, &hdr, sizeof(hdr)))
     {
         USART_Printf("FlashStorage: header program failed\r\n");
-        return;
+        goto out;
     }
     if (!program_words(target + sizeof(WhitelistHeader), wl_write_buf, WL_PAYLOAD_PAD))
     {
         USART_Printf("FlashStorage: payload program failed\r\n");
-        return;
+        goto out;
     }
 
     /* 读回校验：Flash 写失败在掉压时并不总会返回错误，必须自己验 */
@@ -224,7 +237,7 @@ void FlashStorage_WriteWhitelist(CardWhitelist *wl)
             memcmp(&check, wl, WL_PAYLOAD_LEN) != 0)
         {
             USART_Printf("FlashStorage: verify failed, whitelist NOT committed\r\n");
-            return;
+            goto out;
         }
     }
 
@@ -233,7 +246,7 @@ void FlashStorage_WriteWhitelist(CardWhitelist *wl)
     if (!ok)
     {
         USART_Printf("FlashStorage: commit failed, whitelist NOT committed\r\n");
-        return;
+        goto out;
     }
 
     {
@@ -241,7 +254,7 @@ void FlashStorage_WriteWhitelist(CardWhitelist *wl)
         if (h->commit != WL_COMMIT || h->seq != hdr.seq)
         {
             USART_Printf("FlashStorage: readback mismatch, keep old whitelist\r\n");
-            return;
+            goto out;
         }
     }
 
@@ -251,6 +264,9 @@ void FlashStorage_WriteWhitelist(CardWhitelist *wl)
     USART_Printf("FlashStorage: written to slot %c, seq=%lu\r\n",
                  (target == FLASH_SLOT_B_ADDR) ? 'B' : 'A',
                  (unsigned long)whitelist_seq);
+
+out:
+    FLASH_Lock();
 }
 
 void FlashStorage_ReadWhitelist(CardWhitelist *wl)
@@ -348,8 +364,16 @@ void FlashStorage_PrintWhitelist(void)
 
 uint8_t FlashStorage_EraseAll(void)
 {
-    if (FLASH_ErasePage(FLASH_SLOT_A_ADDR) != FLASH_COMPLETE) return 0;
-    if (FLASH_ErasePage(FLASH_SLOT_B_ADDR) != FLASH_COMPLETE) return 0;
+    uint8_t ok = 1;
+
+    FLASH_Unlock();
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR);
+
+    if (FLASH_ErasePage(FLASH_SLOT_A_ADDR) != FLASH_COMPLETE) ok = 0;
+    if (ok && FLASH_ErasePage(FLASH_SLOT_B_ADDR) != FLASH_COMPLETE) ok = 0;
+
+    FLASH_Lock();
+    if (!ok) return 0;
 
     memset(&whitelist, 0, sizeof(whitelist));
     whitelist_seq = 0;

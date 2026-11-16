@@ -10,8 +10,14 @@
 #include <stdio.h>
 
 /* 环形缓冲容量（2 的幂）。单行最长 PI_RX_BUF_SIZE，这里可排队多条命令，
-   避免主循环繁忙时"缓冲覆盖丢指令"。 */
-#define PI_RX_RING_SIZE   256
+   避免主循环繁忙时"缓冲覆盖丢指令"。
+
+   取 512 而不是 256 的原因：加卡/清库要擦 Flash，F1 在擦除期间不能从 Flash 取指，
+   CPU 停 20~80ms（115200 下最多 920 字节）。USART3 那条链路已经改成 DMA + 2KB
+   环形缓冲，但 USART2 仍走 RXNE 中断 + 这个环形缓冲——中断只能把字节搬进这里，
+   256 字节只够 22ms，正好卡在擦除窗口里。512 字节 = 44ms，配合"一次只发一条命令、
+   等 ACK"的树莓派侧节奏足够；真要连续灌数据，这条链路还是得换 DMA。 */
+#define PI_RX_RING_SIZE   512
 
 static uint8_t  pi_rx_ring_buf[PI_RX_RING_SIZE];
 static RingBuffer pi_rx_ring;

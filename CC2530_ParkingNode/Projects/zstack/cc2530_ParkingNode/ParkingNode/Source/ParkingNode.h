@@ -84,6 +84,22 @@ extern "C"
 // Flash Command Duration (milliseconds)
 #define PARKINGNODE_FLASH_DURATION              1000
 
+/* APS 确认（AF_ACK_REQUEST）与有限重传
+ *
+ * 只靠 MAC 层 ACK 只能证明"邻居收到了这一帧"，证明不了"协调器把
+ * 这 9 个字节交给了应用层"。车位状态是事件型数据（FAULT、越界改判）
+ * 丢一帧就是一次误判，所以上报走 APS 确认：协调器的 APS 实体自动回
+ * APS ACK，发送端收到 AF_DATA_CONFIRM_CMD 才知道端到端成功。
+ *
+ * 重传只做 1 次：MAC 层本身已有 3 次重试，APS 再叠加多次重传在
+ * 20 节点 / 4~5Hz 的负载下会把信道利用率推高一倍，收益却很小；
+ * 而周期上报本身有"下一秒再报一次"的自愈能力。
+ *
+ * 注意：EndDevice 是轮询型（POLL_RATE=1000），APS ACK 要等节点
+ * 下一次 poll 才拿得到，所以"确认失败"通常滞后 1s 左右，这里不做
+ * 快速重传的时间假设，收到失败才补发一次。 */
+#define PARKINGNODE_APS_MAX_RETRIES             1
+#define PARKINGNODE_P2P_REPORT_MAX_LEN          9
 // Parking Spot Number - Device's parking spot identifier
 // Modify this value for each parking node device
 #define PARKINGNODE_SPOT_NUM                    1

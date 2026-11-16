@@ -131,7 +131,7 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
 
 > IROM1 = `0x08000000 + 0xF000`（60KB）。作用：应用超限时**链接器直接报错**，而不是让代码悄悄压到白名单扇区；Keil 的下载范围不含 `0x0800F000` 之后，所以**烧写固件不会擦掉已登记的卡白名单**；故障记录页也落在下载范围之外，被保留下来。
 >
-> 当前占用：Code 25744 + RO 3968 + RW 132 = 29844 字节（约 29.1KB / 60KB）。加入帧协议、发送队列、非阻塞状态机后代码增长，白名单因此从 `0x08007000` 挪到更靠后的位置，应用区仍有 30KB 余量。
+> 当前占用：Code 26320 + RO 3968 + RW 136 = 30424 字节（约 29.7KB / 60KB）；RAM 为 RW 136 + ZI 6336 = 6472 字节（约 6.3KB / 20KB），其中 2KB 是 USART3 的 DMA 接收环形缓冲、512 字节是 USART2 的收发环形缓冲。加入帧协议、发送队列、非阻塞状态机后代码增长，白名单因此从 `0x08007000` 挪到更靠后的位置，应用区仍有 30KB 余量。
 >
 > 分区迁移：老固件把白名单放在 `0x08007000`。新固件启动时如果新槽为空、老地址数据合理，会**一次性迁移**过去并打印日志——不迁移等于"升级完车主的卡全没了"，旧地址随后不再使用。
 
@@ -171,10 +171,37 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
 - **看门狗**：入网成功后启动 CC2530 片内看门狗（`WDCTL`，约 1s），每个上报周期喂狗；
   任务卡死 1 秒内自动复位重新入网
 - 上报：P2P 簇（Cluster 4）单播到协调器（0x0000）；协调器收到后经 UART0 原样转发并追加 `\r\n` 给 STM32 USART3
+- **APS 确认 + 有限重传**：P2P 上报带 `AF_ACK_REQUEST`，协调器的 APS 实体回 APS ACK，
+  发送端收到 `AF_DATA_CONFIRM_CMD` 才算端到端送达。原来只有 MAC 层 ACK（只能证明
+  "隔壁节点收到了"），协调器队列满或路由丢包时发送端毫不知情，车位状态就这么静默错
+  一次。失败时补发 1 次（`PARKINGNODE_APS_MAX_RETRIES`）：MAC 层本来就有 3 次重试，
+  APS 再叠加多次重传在 20 节点 / 4~5Hz 的负载下会把信道占用推高一倍；而周期上报
+  自带"下一秒再报"的自愈能力，需要保证的只是偶发丢包和一次性的 `FAULT` 帧。
+  EndDevice 是轮询型（`POLL_RATE=1000`），APS ACK 要等节点下一次 poll 才拿到，
+  所以"确认失败"通常滞后 1s，这里不做"多久没 ACK 就重发"的定时假设
+- **空口加密**：`-DSECURE=1`（`f8wConfig.cfg`），协调器作为信任中心用 `DEFAULT_KEY`
+  作 TC Link Key 加密分发一把随机 Network Key；节点入网后用 Network Key 加解密所有
+  数据帧。原来 `SECURE=0`，一台 CC2530 + 抓包软件就能看到全部车位数据和入网握手。
+  `ZG_SECURE_DYNAMIC=0` 把安全级别固定在编译期（PRO_STANDARD），运行期无法被改成
+  "无安全"。`ZDSECMGR_TC_DEVICE_MAX=21`（1 协调器 + 20 节点）——这个值默认是 1，
+  不改的话从第 2 个节点起就入不了网
 - 配置（`ParkingNode.h`）：端点 `PARKINGNODE_ENDPOINT=20`、Profile `0x0F08`、车位号 `PARKINGNODE_SPOT_NUM`（每个节点改一处）
 - 说明：回波计时目前仍用 `Delay_10us()` 轮询而非 Timer1 输入捕获。用定时器捕获
   更准，但 CC2530 的 Timer1 与 MAC 层定时器存在资源冲突，手上没有第二块节点板
   做回归，因此先保证"不会卡死 + 滤波"，把捕获留作后续（见第 9 节）
+
+编译结果（IAR EW8051，三个配置均 0 error；7 个 warning 全在厂商 `hal_lcd-ssd1331.c`）：
+
+| 配置 | CODE | XDATA | IDATA | DATA | CONST |
+|---|---|---|---|---|---|
+| CoordinatorEB | 152 833 B | 7 630 B / 7 935 B | 192 B | 32 B | 918 B |
+| RouterEB | 152 669 B | 7 634 B / 7 935 B | 192 B | 32 B | 930 B |
+| EndDeviceEB | 133 675 B | 5 635 B / 7 935 B | 192 B | 32 B | 874 B |
+
+> 开 `SECURE=1` 的代价：协调器/路由 CODE 从约 125KB 涨到约 153KB（+28KB，安全服务
+> 提供者 + 信任中心），终端 +8.7KB。XDATA 可用区间是 `0x0001-0x1EFF`（7935 字节，
+> 后 256 字节留给 IDATA 覆盖），协调器还剩约 300 字节；XDATA 里的 768 字节是栈
+> （`XSTACK`）。再往上加功能要先看这个余量，不要以为 CC2530 有 256KB Flash 就随便加。
 
 ### 4.2 STM32_Gateway（Keil MDK）
 
@@ -187,7 +214,7 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
 | `Hardware/pi_link.c` | USART2 传输层：帧编解码、ACK、超时重传、按 SEQ 去重、超长行丢弃后重新同步 |
 | `Hardware/link_frame.c` | 帧格式与 CRC-8/ATM（纯函数，不碰硬件，可在 PC 上单测） |
 | `Hardware/uart_tx.c` | 发送环形队列 + TXE 中断，printf/报文不再阻塞主循环 |
-| `Hardware/Serial.c` | USART3 接收 CC2530 帧；车位变化记 dirty 位图，支持 `PXX:FAULT` |
+| `Hardware/Serial.c` | USART3 接收 CC2530 帧：DMA1_CH3 循环搬进 2KB 环形缓冲（不占 CPU，擦 Flash 时也不丢字节）；车位变化记 dirty 位图，支持 `PXX:FAULT` |
 | `Hardware/barrier.c` | 落杆前安全联锁（防砸红外），限位/电流检测的编译开关 |
 | `System/dwt.c` | DWT 周期计数器，用来实测 ISR 耗时 |
 | `Hardware/USART.c` | USART1 调试串口 + `addcard/delcard/listcards` 白名单命令 |
@@ -223,13 +250,31 @@ Flash 分区（STM32F103C8T6 共 64KB，1KB/页）：
   先写非活动槽、回读校验通过、最后写 commit 标志。写到一半掉电，旧槽仍然有效。
 - **没有默认卡后门**：不再在空库时自动写入一张固定的示例卡。空库就是空库，必须由产测
   工装或管理员显式 `addcard`——内置默认卡等于一把公开的钥匙。
+- **Flash 写之前必须解锁**：F1 复位后 `FLASH_CR` 是锁定的，`FLASH_ErasePage()` /
+  `FLASH_ProgramWord()` 会**直接返回错误而不写**。`flash_storage.c` 的写入与 `EraseAll`
+  现在都成对调用 `FLASH_Unlock()` / `FLASH_Lock()`，并在解锁后清 `EOP/PGERR/WRPRTERR`
+  ——只要挂着一个残留错误位，之后每一次操作都会立刻失败（表现为"第一次加卡失败之后
+  就再也写不进去"）。没解锁时不会被静默写坏：回读校验会报
+  `verify failed, whitelist NOT committed` 并保留旧槽。
+- **commit 字必须留成擦除态**：F1 的 Flash 只能把 1 写成 0。原来的代码先写
+  `commit = 0`、最后再写 `WL_COMMIT`，第二次编程必然 PGERR，commit 永远不成立
+  （现象：每次加卡都提示 `commit failed`，重启后卡就没了）。现在头部里的 commit
+  先保持 `0xFFFFFFFF`，只在最后一步写成 `WL_COMMIT`。
+- **擦 Flash 不再丢车位帧**：F1 擦一页时 CPU 无法从 Flash 取指，整个停 20~40ms；
+  两页（`EraseAll`）最坏 80ms，115200 下就是 920 字节。原来 64 字节的 RX 环形缓冲
+  5.5ms 就满，"加一张卡"必然丢一帧上报。现在 USART3 接收改成 DMA 循环搬运到 2KB
+  环形缓冲：DMA 不取指、不依赖 CPU，擦除期间照常收字节；2KB 在满速下是 178ms，
+  覆盖两页擦除最坏值仍有 2 倍余量。接收侧仍是轮询 `tail`（不用 DMA 中断），
+  所以中断被擦除拖住也不会影响收数。USART2（树莓派）仍走 RXNE 中断，那条链路的
+  环形缓冲同时从 256 放宽到 512 字节（= 44ms），因为树莓派侧的节奏是"一次一条命令、
+  等 ACK"，不需要 DMA；真要连续灌数据，这条链路也得换成 DMA。
 
 串口总览：
 | 串口 | 引脚 | 波特率 | 对端 | 用途 |
 |---|---|---|---|---|
 | USART1 | PA9/PA10 | 115200 | 调试终端 | 日志 + 白名单增删查命令 |
 | USART2 | PA2/PA3 | 115200 | 树莓派 /dev/serial0 | 帧协议：上行 SPOTS/SPOT[:FAULT]/CARD/BARRIER:OPEN[:reason]/BARRIER:CLOSE/CAPTURE/LINK:OK/ACK，下行 PLATE/OPEN[:reason]/CLOSE[:reason]/ACK |
-| USART3 | PB10/PB11 | 115200 | CC2530 协调器 | 接收 `PXX:XXXcm` 车位帧 |
+| USART3 | PB10/PB11 | 115200 | CC2530 协调器 | 接收 `PXX:XXXcm` 车位帧；DMA1_CH3 循环接收 + 2KB 环形缓冲 |
 
 状态机（`state_machine.c`）：
 
@@ -345,6 +390,15 @@ HSV 蓝色掩码（H 90-135）-> 形态学开闭 -> 候选轮廓（宽高比 2.0
     `SPOT:<id>:FAULT`，与"空位"明确区分
 - 节点侧限制：单次测距有界等待（不会卡死），5 点中值滤波 + 2cm 迟滞 + 连续 3 次确认
 - 协调器 -> STM32：UART0 原样转发文本帧并追加 `\r\n`（STM32 USART3，115200 8N1）
+- **安全性（NWK/APS 层）**：`-DSECURE=1`，协调器作信任中心用 TC Link Key（`-DDEFAULT_KEY`）
+  加密分发随机 Network Key，节点入网后用 Network Key 加解密全部数据帧；
+  `-DZG_SECURE_DYNAMIC=0` 固定安全级别，`-DZDSECMGR_TC_DEVICE_MAX=21` 容纳 1+20 个设备。
+  代价是每帧增加安全头 + 4 字节 MIC，且换密钥后所有设备必须一起重编、重新入网
+- **端到端确认**：车位上报带 `AF_ACK_REQUEST`，用 `AF_DATA_CONFIRM_CMD` 统计成败，失败补发 1 次；
+  广播（Periodic）和组播（Flash）不走 APS ACK——广播本来就没人回 ACK
+- **两段链路的分工**：ZigBee 段负责"节点 -> 协调器"的无线传输（加密 + APS 确认），
+  UART 段负责"协调器 -> STM32"（文本帧，无 CRC，靠 STM32 侧的行格式校验）；
+  再往后的 STM32 <-> 树莓派段才有完整帧头/CRC/SEQ/ACK（见 5.2）
 
 ### 5.2 STM32 <-> 树莓派串口协议（USART2）
 
@@ -520,6 +574,21 @@ Flash 分区（64KB，1KB/页）：改分区表需同步 `fault_log.h` 与 Keil 
 
 #define ULTRA_RISE_TIMEOUT_ITERS 3000  // 等回波拉高的计数上限（有界等待）
 #define ULTRA_ECHO_TIMEOUT_ITERS 4000  // 等回波结束的计数上限
+
+#define PARKINGNODE_APS_MAX_RETRIES    1   // APS 确认失败后的补发次数（MAC 层已重试 3 次）
+#define PARKINGNODE_P2P_REPORT_MAX_LEN 9   // 上报帧最大长度（PXX:XXXcm / PXX:FAULT）
+```
+
+ZigBee 安全与确认参数在 `Projects/zstack/Tools/CC2530DB/f8wConfig.cfg`：
+
+```
+-DSECURE=1                      // 空口加密（原来为 0，明文）
+-DZG_SECURE_DYNAMIC=0            // 安全级别编译期固定为 PRO_STANDARD
+-DZDSECMGR_TC_DEVICE_MAX=21      // 信任中心 TC Link Key 条目：1 协调器 + 20 节点
+-DDEFAULT_KEY="{...}"           // TC Link Key，仓库里是示例值，部署前必须替换
+-DAPSC_ACK_WAIT_DURATION_POLLED=3000  // 轮询型终端的 APS ACK 等待（ms）
+-DAPSC_MAX_FRAME_RETRIES=3       // APS 层帧重试次数
+-DNWK_MAX_DATA_RETRIES=2         // NWK 层数据重试次数
 ```
 
 ## 7. 编译与部署
@@ -650,6 +719,8 @@ SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | 
 | 现场运维 | 树莓派服务化（systemd 自启 + 崩溃重启 + journald 日志），串口线程与云端发布解耦 |
 | 可审计 | 每次开闸记录凭证来源（card/plate/remote）与会话 TTL，区分刷卡、识别、远程开闸 |
 | 链路完整性 | 串口帧带 CRC-8 + 序号 + ACK + 重传，坏帧丢弃、重复帧不重做；裸文本仍兼容 |
+| 空口安全 | ZigBee 段 `SECURE=1`：信任中心分发随机 Network Key，全帧加密；TC Link Key 可轮换 |
+| 端到端确认 | 车位上报带 APS ACK，失败补发 1 次；MAC 层已有 3 次重试，不重复叠加 |
 | 抗干扰 | 超声波 5 点中值 + 2cm 迟滞 + 3 次确认；回波超时上报 `FAULT` 而不是"空位" |
 | 掉电安全 | 白名单 A/B 双槽 + CRC + commit 标志；写一半掉电不会丢整库，也不再内置默认卡 |
 | 安全联锁 | 落杆前查防砸红外，故障态保持开闸；限位/电流检测接口已预留 |
@@ -658,7 +729,7 @@ SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | 
 
 ## 9. 注意事项
 
-1. **ZigBee 网络**：首次部署协调器先启动，节点自动入网
+1. **ZigBee 网络**：首次部署协调器先启动，节点自动入网。现在开了 `SECURE=1`，**协调器与全部节点必须用同一份 `f8wConfig.cfg` 编译**（同一把 TC Link Key）；只重编一部分节点会出现"入网失败"或"入网成功但数据不通"
 2. **共地**：STM32 / 树莓派 / CC2530 必须共地，否则串口数据不可靠（此前刷卡不上报、云命令无响应的根因）
 3. **串口电平**：USART3 与协调器、USART2 与树莓派均需电平匹配
 4. **源码编码**：STM32 源码为 UTF-8，修改注意保持编码，避免中文注释乱码
@@ -680,3 +751,12 @@ SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | 
 14. **执行机构是原型件**：SG90 舵机没有限位开关、没有电机电流检测、没有防砸冗余。
     `barrier.c` 已把安全策略和接口留好（`BARRIER_HAS_LIMIT_SWITCHES` /
     `BARRIER_HAS_CURRENT_SENSE`），换真实道闸时必须补齐这几路信号再上线。
+15. **ZigBee 密钥轮换**：`f8wConfig.cfg` 里的 `-DDEFAULT_KEY` 是示例值（保证 clone 下来能编能跑），
+    现场部署必须换成自己的随机 16 字节，生成方法写在配置文件注释里。换钥匙等于换网络：
+    协调器和所有节点一起重编、重新入网；首次升级建议整片擦除一次（Z-Stack 的 NV 页不在
+    下载范围内，旧的安全表/密钥会残留），开过 `NV_RESTORE` 的设备要先清 NV，否则拿旧
+    Network Key 发的帧会被信任中心直接丢弃。改完用 `tools/check_secrets.py` 自查一遍，
+    并且不要把真实密钥提交进公开仓库。
+16. **加卡不再打断车位采集**：白名单写入要擦 Flash（CPU 停 20~80ms），USART3 已改成 DMA
+    接收 + 2KB 环形缓冲，擦除期间字节照常进 SRAM。如果以后把缓冲改回中断方式，这个坑会
+    立刻回来——"加一张卡丢一帧车位"这种问题很难在现场复现。

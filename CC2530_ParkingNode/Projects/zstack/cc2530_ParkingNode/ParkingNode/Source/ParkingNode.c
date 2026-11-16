@@ -154,6 +154,103 @@ void ParkingNode_SendPeriodicMessage( void );
 void ParkingNode_SendFlashMessage( uint16 flashTime );
 void ParkingNode_SendDistanceData( void );
 
+
+/*********************************************************************
+ * APS 确认（端到端）与有限重传
+ *
+ * 为什么需要：原来 P2P 上报只带 AF_DISCV_ROUTE，只有 MAC 层 ACK ——
+ * 那只证明"我旁边那个节点收到了这一帧"。如果协调器的接收队列满、
+ * 或者帧在路由上被丢弃，发送端完全不知道，车位状态就这么静默地
+ * 错一次。加上 AF_ACK_REQUEST 之后，协调器的 APS 实体回 APS ACK，
+ * 发送端收到 AF_DATA_CONFIRM_CMD 才算端到端送达。
+ *
+ * 只重传 1 次，理由是：MAC 层已有 3 次重试，APS 再叠加多次重传在
+ * 20 节点 / 4~5Hz 的负载下会把信道占用推高一倍；而周期上报本身
+ * 自带"下一次再报"的自愈能力。真正需要保证的是一次性的 FAULT 帧，
+ * 一次补发足够覆盖偶发丢包。
+ *
+ * 注意 EndDevice 是轮询型（POLL_RATE=1000），APS ACK 要等节点下一次
+ * poll 才收到，"确认失败"通常滞后 1s，因此这里不依赖任何"多久没 ACK
+ * 就重传"的定时假设，只在确认回调里补发。
+ */
+typedef struct
+{
+  uint8 buf[PARKINGNODE_P2P_REPORT_MAX_LEN];  /* 最近一次上报内容（补发用） */
+  uint8 len;                                  /* 实际长度 */
+  uint8 trans;                                /* AF_DataRequest 用的 transID */
+  uint8 retries;                              /* 已补发次数 */
+  uint8 active;                               /* 1 = 还在等 APS ACK */
+} p2pReport_t;
+
+static p2pReport_t p2p_report;
+static uint16 aps_ack_ok   = 0;   /* 诊断计数：端到端确认成功 */
+static uint16 aps_ack_fail = 0;   /* 诊断计数：确认失败（含补发那次） */
+
+/* 把 p2p_report.buf 发出去；成功只代表"已入队"，送达看确认回调 */
+static uint8 ParkingNode_SendP2P( void )
+{
+  uint8 trans = ParkingNode_TransID;
+  afStatus_t stat;
+
+  stat = AF_DataRequest( &ParkingNode_P2P_DstAddr, &ParkingNode_epDesc,
+                         PARKINGNODE_P2P_CLUSTERID,
+                         p2p_report.len, p2p_report.buf,
+                         &ParkingNode_TransID,
+                         AF_DISCV_ROUTE | AF_ACK_REQUEST,
+                         AF_DEFAULT_RADIUS );
+  if ( stat == afStatus_SUCCESS )
+  {
+    p2p_report.trans  = trans;
+    p2p_report.active = 1;
+    return 1;
+  }
+
+  p2p_report.active = 0;
+  return 0;
+}
+
+/* 上报一条车位数据（带上限内的补发能力） */
+static void ParkingNode_ReportP2P( const uint8 *data, uint8 len )
+{
+  if ( len > PARKINGNODE_P2P_REPORT_MAX_LEN )
+  {
+    len = PARKINGNODE_P2P_REPORT_MAX_LEN;
+  }
+
+  osal_memcpy( p2p_report.buf, data, len );
+  p2p_report.len     = len;
+  p2p_report.retries = 0;
+  (void)ParkingNode_SendP2P();
+}
+
+/* AF_DATA_CONFIRM_CMD：只有在请求里带了 AF_ACK_REQUEST 才会来 */
+static void ParkingNode_HandleDataConfirm( uint8 transID, uint8 status )
+{
+  if ( !p2p_report.active || transID != p2p_report.trans )
+  {
+    return;   /* 是更早那条上报的确认，已经被新数据取代 */
+  }
+
+  if ( status == afStatus_SUCCESS )
+  {
+    p2p_report.active = 0;
+    if ( aps_ack_ok < 0xFFFF ) aps_ack_ok++;
+    return;
+  }
+
+  if ( aps_ack_fail < 0xFFFF ) aps_ack_fail++;
+
+  if ( p2p_report.retries < PARKINGNODE_APS_MAX_RETRIES )
+  {
+    p2p_report.retries++;
+    (void)ParkingNode_SendP2P();
+  }
+  else
+  {
+    p2p_report.active = 0;   /* 放弃，等下一次周期上报 */
+  }
+}
+
 /*********************************************************************
  * NETWORK LAYER CALLBACKS
  */
@@ -265,6 +362,12 @@ uint16 ParkingNode_ProcessEvent( uint8 task_id, uint16 events )
         // Received when a message is received (OTA) for this endpoint
         case AF_INCOMING_MSG_CMD:
           ParkingNode_MessageMSGCB( MSGpkt );
+          break;
+
+        // APS 确认结果（只有 AF_ACK_REQUEST 的请求才回这个）
+        case AF_DATA_CONFIRM_CMD:
+          ParkingNode_HandleDataConfirm( ((afDataConfirm_t *)MSGpkt)->transID,
+                                         MSGpkt->hdr.status );
           break;
 
         // Received whenever the device changes state in the network
@@ -627,10 +730,7 @@ void ParkingNode_SendDistanceData( void )
             TxBuff[3] = ':';
             osal_memcpy(&TxBuff[4], "FAULT", 5);
             len = 9;
-            (void)AF_DataRequest( &ParkingNode_P2P_DstAddr, &ParkingNode_epDesc,
-                                  PARKINGNODE_P2P_CLUSTERID,
-                                  len, TxBuff, &ParkingNode_TransID,
-                                  AF_DISCV_ROUTE, AF_DEFAULT_RADIUS );
+            ParkingNode_ReportP2P( TxBuff, len );
         }
         return;
     }
@@ -689,10 +789,7 @@ void ParkingNode_SendDistanceData( void )
         TxBuff[8] = 'm';
         len = 9;
 
-        (void)AF_DataRequest( &ParkingNode_P2P_DstAddr, &ParkingNode_epDesc,
-                              PARKINGNODE_P2P_CLUSTERID,
-                              len, TxBuff, &ParkingNode_TransID,
-                              AF_DISCV_ROUTE, AF_DEFAULT_RADIUS );
+        ParkingNode_ReportP2P( TxBuff, len );
     }
 }
 
