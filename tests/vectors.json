@@ -1,0 +1,56 @@
+{
+  "spec": "'#' VER SEQ(2 hex) LEN(2 hex) PAYLOAD '*' CRC(2 hex)，CRC-8/ATM(poly=0x07, init=0x00) 覆盖 VER..PAYLOAD",
+  "version": 1,
+  "max_payload": 63,
+  "_comment": "由 tools/gen_protocol_vectors.py 生成，勿手工编辑",
+  "vectors": [
+    {
+      "name": "open_card",
+      "seq": 5,
+      "payload": "OPEN:card",
+      "len": 9,
+      "hex": "2331303530394F50454E3A636172642A3931",
+      "ascii": "#10509OPEN:card*91"
+    },
+    {
+      "name": "open_plate",
+      "seq": 6,
+      "payload": "OPEN:plate",
+      "len": 10,
+      "hex": "2331303630414F50454E3A706C6174652A3638",
+      "ascii": "#1060AOPEN:plate*68"
+    },
+    {
+      "name": "close_remote",
+      "seq": 7,
+      "payload": "CLOSE:remote",
+      "len": 12,
+      "hex": "233130373043434C4F53453A72656D6F74652A3330",
+      "ascii": "#1070CCLOSE:remote*30"
+    },
+    {
+      "name": "plate_chinese",
+      "seq": 42,
+      "payload": "PLATE:京A00001",
+      "len": 15,
+      "hex": "233132413046504C4154453AE4BAAC4130303030312A4532",
+      "ascii": "#12A0FPLATE:...A00001*E2"
+    },
+    {
+      "name": "spot_fault",
+      "seq": 255,
+      "payload": "SPOT:7:FAULT",
+      "len": 12,
+      "hex": "23314646304353504F543A373A4641554C542A4330",
+      "ascii": "#1FF0CSPOT:7:FAULT*C0"
+    },
+    {
+      "name": "link_ok",
+      "seq": 0,
+      "payload": "LINK:OK",
+      "len": 7,
+      "hex": "2331303030374C494E4B3A4F4B2A3439",
+      "ascii": "#10007LINK:OK*49"
+    }
+  ]
+}

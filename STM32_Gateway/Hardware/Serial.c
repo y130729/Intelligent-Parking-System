@@ -209,7 +209,7 @@ void Serial_Printf(char *format, ...)
 	char String[100];				//定义字符数组
 	va_list arg;					//定义可变参数列表数据类型的变量arg
 	va_start(arg, format);			//从format开始，接收参数列表到arg变量
-	vsprintf(String, format, arg);	//使用vsprintf打印格式化字符串和参数列表到字符数组中
+	vsnprintf(String, sizeof(String), format, arg);	//有界版本：格式串再长也不会写出 String[100]
 	va_end(arg);					//结束变量arg
 	Serial_SendString(String);		//串口发送字符数组（字符串）
 }

@@ -32,6 +32,8 @@ Thumbs.db
 # ---- Keil user-specific files ----
 *.uvoptx
 *.uvguix.*
+# ---- CI artifacts ----
+fw_lint.json
 # ---- runtime logs ----
 events.jsonl
 # ---- device secrets (never commit) ----

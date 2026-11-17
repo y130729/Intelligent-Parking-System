@@ -1,0 +1,48 @@
+name: CI
+
+# 全部是"不需要硬件"的检查：纯 Python 单测 + 静态分析 + 文档一致性。
+# 目标不是覆盖率数字，而是让"改了固件忘了改文档 / 两边协议对不上"这类
+# 问题在 PR 阶段就红掉。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 不需要 pip install：测试与检查脚本只用标准库。
+      # 这是刻意的——评审者 clone 下来不装任何东西就能复现。
+      - name: 语法检查（编译所有 .py）
+        run: python -m compileall -q raspberrypi tests tools
+
+      - name: 跑全部检查
+        run: python tools/run_tests.py
+
+      - name: 固件静态检查（JSON，便于存档）
+        if: always()
+        run: python tools/fw_lint.py --json --output fw_lint.json
+
+      - name: 上传静态检查结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fw-lint-${{ matrix.os }}-py${{ matrix.python }}
+          path: fw_lint.json
+          if-no-files-found: ignore

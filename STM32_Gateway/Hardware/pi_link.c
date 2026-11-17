@@ -303,7 +303,7 @@ static void PI_UART_HandleLine(const char *line)
     {
         char ack[8];
         pi_stats.rx_duplicates++;
-        sprintf(ack, "ACK:%02X", (unsigned int)seq);
+        snprintf(ack, sizeof(ack), "ACK:%02X", (unsigned int)seq);
         PI_UART_SendFramed(ack);   /* ACK 帧不 track，不会再引发 ACK */
         return;
     }
@@ -313,7 +313,7 @@ static void PI_UART_HandleLine(const char *line)
 
     {
         char ack[8];
-        sprintf(ack, "ACK:%02X", (unsigned int)seq);
+        snprintf(ack, sizeof(ack), "ACK:%02X", (unsigned int)seq);
         PI_UART_SendFramed(ack);
     }
 

@@ -76,7 +76,7 @@ void Infrared_Clear_New_Obstruction_Flag(void)
 
 uint8_t Infrared_Is_Blocked(void)
 {
-    BitAction pin_state = GPIO_ReadInputDataBit(INFRARED_GPIO_PORT, INFRARED_GPIO_PIN);
+    uint8_t pin_state = GPIO_ReadInputDataBit(INFRARED_GPIO_PORT, INFRARED_GPIO_PIN);
     
     if(pin_state == Bit_RESET)
     {
