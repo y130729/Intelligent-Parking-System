@@ -52,6 +52,7 @@
 | `raspberrypi/` | 树莓派网关：MQTT 云端 + 串口 + 车牌识别 |
 | `WechatProject/` | 微信小程序（本文档不展开） |
 | `tests/` | 固件静态/一致性测试 + 协议黄金样本（纯 Python，无硬件） |
+| `TESTING.md` | 测试文档：用例清单、静态规则、缺陷记录、基线结果 |
 | `tools/` | 静态检查、密钥扫描、一键测试脚本 |
 | `.github/workflows/` | CI：Linux + Windows × Python 3.9/3.12 |
 
@@ -770,6 +771,8 @@ SSH 工具：plink/pscp（PuTTY）；批量脚本建议 base64 后 `echo $b64 | 
 
 ## 10. 测试与质量保障
 
+完整用例清单、五条静态规则、缺陷记录与基线结果见 [`TESTING.md`](TESTING.md)，本节只做概述。
+
 设计原则：**不需要硬件、不需要编译器、不需要 `pip install`**。评审者 `git clone` 之后
 一条命令即可复现全部检查：
 
@@ -781,7 +784,7 @@ python tools/run_tests.py --list   # 只看步骤
 | 层次 | 位置 | 规模 | 外部依赖 | 覆盖什么 |
 |---|---|---|---|---|
 | 树莓派纯逻辑 | `raspberrypi/tests/` | 123 项 | 标准库（串口/MQTT/OpenCV 用桩） | 帧编解码、ACK/重传/去重、过闸会话 TTL、发布线程与队列背压、车牌格式与模糊匹配 |
-| 固件静态/一致性 | `tests/` | 73 项 | 标准库 | 静态规则自测、Flash 分区、RAM/缓冲预算、协议黄金样本、文档漂移、CI 配置 |
+| 固件静态/一致性 | `tests/` | 74 项 | 标准库 | 静态规则自测、Flash 分区、RAM/缓冲预算、协议黄金样本、文档漂移、CI 配置 |
 | 固件静态检查 | `tools/fw_lint.py` | 5 条规则 | 无 | ISR 阻塞调用、无超时轮询、无界字符串、共享变量 volatile、Flash 解锁 |
 | 密钥扫描 | `tools/check_secrets.py` | — | 无 | 明文密码、私钥、内网地址 |
 
@@ -792,7 +795,7 @@ CI 在 Linux + Windows × Python 3.9/3.12 四个组合上跑同一套命令（`.
 | 方案 | 优点 | 为什么没选 |
 |---|---|---|
 | cppcheck / clang-tidy | 规则多、业界认可 | 要装工具链；Windows 上还要配 include 路径。评审者跑不起来就等于没有 |
-| pytest | 插件生态好 | 多一个依赖，而 `unittest` 已经够用（两个套件合计 196 项） |
+| pytest | 插件生态好 | 多一个依赖，而 `unittest` 已经够用（两个套件合计 197 项） |
 | PC 端编译 C 做单测 | 能真正执行固件逻辑 | 本机没有 host 编译器；且 `link_frame.c` 是纯函数，真要做得先引 cmake，收益不如先把静态规则做实 |
 
 取舍很明确：**可复现性优先于规则数量**。宁可只有 5 条规则，也要保证任何人 clone 下来

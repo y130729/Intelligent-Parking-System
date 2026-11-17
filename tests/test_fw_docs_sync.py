@@ -154,6 +154,20 @@ class TestCountTest(unittest.TestCase):
         self.assertIn("合计 %d 项" % (rpi + fw), readme,
                       "README 里的合计用例数过期了（实际 %d）" % (rpi + fw))
 
+    def test_testing_doc_states_real_counts(self):
+        """TESTING.md 里的数字同样必须是真的。
+
+        README 过期只是"介绍不准"，测试文档过期会误导人按错的基线判断结果，
+        所以这里单独卡一次：两份文档都得与实际用例数一致。
+        """
+        path = os.path.join(common.REPO_ROOT, "TESTING.md")
+        self.assertTrue(os.path.exists(path), "缺少 TESTING.md（测试文档）")
+        doc = common.read(path)
+        rpi = self._count(os.path.join("raspberrypi", "tests"))
+        fw = self._count("tests")
+        want = "> 用例总数：%d 项（树莓派 %d + 固件 %d）" % (rpi + fw, rpi, fw)
+        self.assertIn(want, doc, "TESTING.md 的用例总数过期了，应为：%s" % want)
+
 
 class CodeSizeTest(unittest.TestCase):
     """README 里贴的编译体积要自洽，而且必须装得进应用区。"""
