@@ -23,7 +23,7 @@
 
 | 项 | 要求 / 实测 |
 |---|---|
-| Python | 3.9 及以上；开发机实测 3.13.12，CI 覆盖 3.9 与 3.12 |
+| Python | 3.9 及以上；开发机实测 3.13.12，CI 覆盖 3.9、3.12、3.13 |
 | 第三方库 | **无**。只用 `unittest` / `re` / `os` / `json` / `threading` 等标准库 |
 | 串口 / MQTT / OpenCV | 由 `raspberrypi/tests/support.py` 打桩，不需要真设备 |
 | 硬件 | 不需要（无板卡、无摄像头、无传感器） |
@@ -116,7 +116,7 @@ CI 配置本身的不变量（不解析 YAML，只盯最易失效的几处）。
 
 | 类 | 条数 | 覆盖内容 |
 |---|---|---|
-| `CiFileTest` | 5 | 无制表符/CRLF；触发条件含 push 与 pull_request；矩阵含 ubuntu+windows × py3.9+3.12 且 `fail-fast: false`；所有 `run:` 都是纯 `python` 命令（不写 shell 专有语法）；README 徽章指向真实存在的 workflow 文件 |
+| `CiFileTest` | 5 | 无制表符/CRLF；触发条件含 push 与 pull_request；矩阵含 ubuntu+windows、覆盖 py3.9/3.12/3.13 且 `fail-fast: false`；所有 `run:` 都是纯 `python` 命令（不写 shell 专有语法）；README 徽章指向真实存在的 workflow 文件 |
 
 ## 6. 树莓派侧用例清单（`raspberrypi/tests/`，123 项）
 

@@ -421,7 +421,7 @@ IWDG 4 秒兜底，HardFault 记录 `CFSR/BFAR` 等现场到 Flash 保留页并�
 | 固件静态检查 | `tools/fw_lint.py` | 5 条规则 | ISR 阻塞调用、无超时轮询、无界字符串、共享变量 volatile、Flash 解锁 |
 | 密钥扫描 | `tools/check_secrets.py` | — | 明文密码、私钥、内网地址 |
 
-合计 197 项，一条命令约 2 秒跑完；CI 在 Linux 与 Windows × Python 3.9/3.12 四个组合上执行同一套命令。
+合计 197 项，一条命令约 2 秒跑完；CI 在 Ubuntu 与 Windows 上覆盖 Python 3.9 / 3.12 / 3.13（3.9 固定在 ubuntu-22.04 上跑）。
 
 ### 静态规则
 

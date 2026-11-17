@@ -23,7 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.9", "3.12"]
+        python: ["3.12", "3.13"]
+        # setup-python 在 ubuntu-24.04（ubuntu-latest）上不提供 3.9 的二进制，
+        # 直接把 3.9 放到仍受支持的 22.04 镜像上，避免整条流水线因工具链缺失而红。
+        include:
+          - os: ubuntu-22.04
+            python: "3.9"
 
     steps:
       - uses: actions/checkout@v4
