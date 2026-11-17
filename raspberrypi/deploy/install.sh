@@ -14,7 +14,7 @@
 #
 # 注意：本脚本会建新 venv 并 pip install，**需要外网**。
 # 如果这台树莓派没有外网（现场机器常见），不要用本脚本，
-# 改为复用已有 venv 做原地升级 —— 步骤见 Readme「原地升级」一节。
+# 改为复用已有 venv 做原地升级 —— 步骤见 Readme「Quick Start · 树莓派网关」。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
