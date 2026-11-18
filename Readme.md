@@ -14,34 +14,41 @@ STM32F103 网关负责 RFID 识别、红外触发、道闸控制与本地显示�
 
 ### 系统架构
 
-```
-┌──────────────────────────────────────────────────┐
-│              华为云 IoTDA（MQTTS 8883）            │
-│        设备影子 / 属性上报 / 命令下发               │
-└───────────────────────┬──────────────────────────┘
-                        │  MQTT over TLS
-┌───────────────────────▼──────────────────────────┐
-│  树莓派 Zero WH                                    │
-│  plate_gateway.py                                  │
-│   ├─ 串口帧编解码（CRC-8 / SEQ / ACK / 重传）       │
-│   ├─ 车牌识别（拍照 → OCR → 车辆档案匹配）          │
-│   ├─ 过闸会话与凭证判定（card / plate / remote）    │
-│   └─ 发布线程（解析与上报解耦）                     │
-└───────────────────────┬──────────────────────────┘
-                        │  USART2 115200 8N1
-                        │  #VER SEQ LEN payload *CRC
-┌───────────────────────▼──────────────────────────┐
-│  STM32F103C8T6 网关                                │
-│   ├─ USART3 ← CC2530 协调器（车位帧）               │
-│   ├─ RFID MFRC522 / 红外对射 / 舵机 / OLED          │
-│   ├─ Flash 白名单 A/B 槽 + 故障现场记录             │
-│   └─ 事件驱动状态机 + IWDG                         │
-└───────────────────────┬──────────────────────────┘
-                        │  ZigBee（SECURE=1，全帧加密）
-┌───────────────────────▼──────────────────────────┐
-│  CC2530 车位节点 × 20（HC-SR04 超声波）            │
-│   周期上报 PXX:XXXcm / PXX:FAULT                   │
-└──────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph CLOUD["华为云 IoTDA · MQTTS 8883"]
+        IOT["设备影子 · 属性上报 · 命令下发"]
+    end
+
+    subgraph PI["树莓派 Zero WH"]
+        FRAME["串口帧编解码<br/>CRC-8 · SEQ · ACK · 重传"]
+        PLATE["车牌识别<br/>拍照 → OCR → 档案匹配"]
+        SESS["过闸会话<br/>凭证 card / plate / remote"]
+        PUB["发布线程<br/>解析与上报解耦"]
+    end
+
+    subgraph MCU["STM32F103C8T6 网关"]
+        LINK["链路层<br/>USART2 帧收发"]
+        SM["事件驱动状态机<br/>按截止时间推进"]
+        IO["MFRC522 · 红外 PA11<br/>舵机 PA1 · OLED I2C"]
+        FLASH["Flash 白名单 A/B 槽 + 故障记录"]
+    end
+
+    subgraph NODE["CC2530 车位节点 × 20"]
+        ULTRA["HC-SR04 测距<br/>五点中值 · 2cm 迟滞 · 3 次确认"]
+    end
+
+    ULTRA -->|"ZigBee  PXX:XXXcm（SECURE=1）"| LINK
+    LINK <-->|"USART2 115200 8N1<br/>帧: VER / SEQ / LEN / PAYLOAD / CRC"| FRAME
+    FRAME --> PLATE
+    FRAME --> SESS
+    PLATE --> SESS
+    SESS --> PUB
+    SM --> IO
+    SM --> FLASH
+    PUB -->|"MQTT over TLS"| IOT
+
+    IO -.->|"CAPTURE / 凭证"| SM
 ```
 
 ### 一次过闸的时序
